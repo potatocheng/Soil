@@ -6,8 +6,19 @@ import (
 	"strings"
 )
 
+type nodeType int
+
+const (
+	nodeTypeStatic = iota //静态路由
+	nodeTypeReg           //正则路由
+	nodeTypeParam         //路径参数路由
+	nodeTypeAny           //通配符路由
+)
+
 // 路由优先级: 静态匹配 > 正则匹配 > 路径参数 > 通配符匹配
 type node struct {
+	typ nodeType
+
 	// 该节点的路径
 	path string
 
@@ -44,7 +55,7 @@ func (n *node) childOrCreate(path string) *node {
 
 		if n.starChild == nil {
 			//原来没有通配符路由，现在创建
-			n.starChild = &node{path: path}
+			n.starChild = &node{path: path, typ: nodeTypeAny}
 		}
 
 		return n.starChild
@@ -70,7 +81,7 @@ func (n *node) childOrCreate(path string) *node {
 	child, ok := n.children[path]
 	if !ok {
 		//没有匹配成功，创建节点
-		child = &node{path: path}
+		child = &node{path: path, typ: nodeTypeStatic}
 		n.children[path] = child
 	}
 
@@ -105,7 +116,7 @@ func (n *node) childOrCreateParam(path string, paramName string) *node {
 	}
 
 	if n.paramChild == nil {
-		n.paramChild = &node{path: path, paramName: paramName}
+		n.paramChild = &node{path: path, paramName: paramName, typ: nodeTypeParam}
 	} else {
 		if n.paramChild.path != path {
 			panic(fmt.Sprintf("web: 非法路由，已有参数。已有[%s]， 新建[%s]", n.paramChild.path, path))
@@ -129,7 +140,7 @@ func (n *node) childOrCreateRegex(path string, exp string, paramName string) *no
 		if err != nil {
 			panic(fmt.Errorf("web: 正则表达式[%s]错误 %w", exp, err))
 		}
-		n.regexChild = &node{path: path, paramName: paramName, regExpr: regExpr}
+		n.regexChild = &node{path: path, paramName: paramName, regExpr: regExpr, typ: nodeTypeReg}
 	} else {
 		if n.regExpr.String() != exp || n.paramName != paramName {
 			panic(fmt.Sprintf("web: 路由冲突，正则路由冲突，已有 %s, 新注册 %s", n.regexChild.path, path))
@@ -139,7 +150,7 @@ func (n *node) childOrCreateRegex(path string, exp string, paramName string) *no
 	return n.regexChild
 }
 
-func (n *node) childOf(path string) (*node, bool)  {
+func (n *node) childOf(path string) (*node, bool) {
 	if n.children == nil {
 		return n.childOfNonStatic(path)
 	}
@@ -150,10 +161,10 @@ func (n *node) childOf(path string) (*node, bool)  {
 		return n.childOfNonStatic(path)
 	}
 
-	return child, ok;
+	return child, ok
 }
 
-func (n *node) childOfNonStatic(path string) (*node, bool)  {
+func (n *node) childOfNonStatic(path string) (*node, bool) {
 	if n.regexChild != nil {
 		if n.regexChild.regExpr.Match([]byte(path)) {
 			return n.regexChild, true
@@ -172,8 +183,8 @@ type router struct {
 	trees map[string]*node
 }
 
-func newRouter() *router {
-	return &router{
+func newRouter() router {
+	return router{
 		trees: make(map[string]*node),
 	}
 }
@@ -232,22 +243,44 @@ func (r *router) findRoute(method string, path string) (*matchInfo, bool) {
 		return nil, false
 	}
 
-
-	if root.children != nil {
-		segments := strings.Split(strings.Trim(path, "/"), "/")
-		for _, seg := segments {
-
-		}
+	if path == "/" {
+		return &matchInfo{node: root}, true
 	}
+
+	segments := strings.Split(strings.Trim(path, "/"), "/")
+	mi := &matchInfo{}
+	for _, segment := range segments {
+		var child *node
+		child, ok = root.childOf(segment)
+		if !ok {
+			//如果注册了通配符路由:"/user/*",那么/user/a/b/c也能匹配/user/*路由
+			if root.typ == nodeTypeAny {
+				mi.node = root
+				return mi, true
+			}
+			return nil, false
+		}
+
+		if child.paramName != "" {
+			mi.addValue(child.paramName, path)
+		}
+		root = child
+	}
+	mi.node = root
+	return mi, true
 }
 
 // matchInfo node表示匹配上的节点，匹配到children, starChild, regexChild时返回node;
 // paramChild 表示匹配到路径参数，返回的内容类似<id:123>
 type matchInfo struct {
-	node       *node
-	paramChild map[string]string
+	node      *node
+	paramPath map[string]string
 }
 
-//func (m *matchInfo) addValue()  {
-//
-//}
+func (m *matchInfo) addValue(key string, value string) {
+	if m.paramPath == nil {
+		m.paramPath = map[string]string{key: value}
+	}
+
+	m.paramPath[key] = value
+}

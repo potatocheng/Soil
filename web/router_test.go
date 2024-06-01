@@ -216,5 +216,55 @@ func (n *node) equal(other *node) (string, bool) {
 }
 
 func Test_find_router(t *testing.T) {
+	r := newRouter()
+	mockHandler := func(ctx *Context) {}
 
+	testRouter := []struct {
+		method string
+		path   string
+	}{
+		{
+			method: http.MethodGet,
+			path:   "/user/*",
+		},
+	}
+
+	for _, route := range testRouter {
+		r.addRoute(route.method, route.path, mockHandler)
+	}
+
+	testCases := []struct {
+		testName      string
+		method        string
+		path          string
+		want          bool
+		wantMatchInfo *matchInfo
+	}{
+		{
+			testName: "通配符匹配，通配符出现在中间",
+			method:   http.MethodGet,
+			path:     "/user/star/detail/china",
+			want:     true,
+			wantMatchInfo: &matchInfo{
+				node: &node{typ: nodeTypeAny, path: "*", handler: mockHandler},
+			},
+		},
+	}
+
+	for _, c := range testCases {
+		t.Run(c.testName, func(t *testing.T) {
+			mi, ok := r.findRoute(c.method, c.path)
+			assert.Equal(t, c.want, ok)
+			if !ok {
+				return
+			}
+
+			assert.Equal(t, c.wantMatchInfo.paramPath, mi.paramPath)
+			assert.Equal(t, c.wantMatchInfo.node.path, mi.node.path)
+			n := mi.node
+			wantHandler := reflect.ValueOf(c.wantMatchInfo.node.handler)
+			nVal := reflect.ValueOf(n.handler)
+			assert.Equal(t, wantHandler, nVal)
+		})
+	}
 }
