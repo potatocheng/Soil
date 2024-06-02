@@ -1,6 +1,7 @@
 package orm
 
 import (
+	"Soil/orm/internal/model"
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 	"reflect"
@@ -18,58 +19,66 @@ func Test_DB(t *testing.T) {
 	testCases := []struct {
 		name      string
 		val       any
-		wantModel *Model
+		wantModel *model.Model
 		wantErr   error
-		fieldPtr  *Field
+		fieldPtr  *model.Field
 	}{
 		{
 			// 指针
 			name: "pointer",
 			val:  &TestModel{},
-			wantModel: &Model{
+			wantModel: &model.Model{
 				TableName: "test_model",
-				FieldMap: map[string]*Field{
+				FieldMap: map[string]*model.Field{
 					"Id": {
 						ColName: "id",
 						Type:    reflect.TypeOf(int64(0)),
 						GoName:  "Id",
+						Offset:  0,
 					},
 					"FirstName": {
 						ColName: "first_name",
 						Type:    reflect.TypeOf(""),
 						GoName:  "FirstName",
+						Offset:  8,
 					},
 					"Age": {
 						ColName: "age",
 						Type:    reflect.TypeOf(int8(0)),
 						GoName:  "Age",
+						Offset:  24,
 					},
 					"LastName": {
 						ColName: "last_name",
 						Type:    reflect.TypeOf(""),
 						GoName:  "LastName",
+						Offset:  32,
 					},
 				},
-				ColumnMap: map[string]*Field{
+				ColumnMap: map[string]*model.Field{
 					"id": {
 						ColName: "id",
 						Type:    reflect.TypeOf(int64(0)),
 						GoName:  "Id",
+						Offset:  0,
 					},
 					"first_name": {
 						ColName: "first_name",
 						Type:    reflect.TypeOf(""),
 						GoName:  "FirstName",
+						Offset:  8,
 					},
 					"age": {
 						ColName: "age",
 						Type:    reflect.TypeOf(int8(0)),
 						GoName:  "Age",
+						Offset:  24,
 					},
 					"last_name": {
 						ColName: "last_name",
 						Type:    reflect.TypeOf(""),
 						GoName:  "LastName",
+						Offset:  32,
 					},
 				},
 			},
@@ -77,19 +86,19 @@ func Test_DB(t *testing.T) {
 		{
 			name: "test Model",
 			val:  &TestModel{},
-			wantModel: &Model{
+			wantModel: &model.Model{
 				TableName: "test_model",
-				FieldMap: map[string]*Field{
-					"Id":        {ColName: "id", Type: reflect.TypeOf(int64(0)), GoName: "Id"},
-					"FirstName": {ColName: "first_name", Type: reflect.TypeOf(""), GoName: "FirstName"},
-					"Age":       {ColName: "age", Type: reflect.TypeOf(int8(0)), GoName: "Age"},
-					"LastName":  {ColName: "last_name", Type: reflect.TypeOf(""), GoName: "LastName"},
+				FieldMap: map[string]*model.Field{
+					"Id":        {ColName: "id", Type: reflect.TypeOf(int64(0)), GoName: "Id", Offset: 0},
+					"FirstName": {ColName: "first_name", Type: reflect.TypeOf(""), GoName: "FirstName", Offset: 8},
+					"Age":       {ColName: "age", Type: reflect.TypeOf(int8(0)), GoName: "Age", Offset: 24},
+					"LastName":  {ColName: "last_name", Type: reflect.TypeOf(""), GoName: "LastName", Offset: 32},
 				},
-				ColumnMap: map[string]*Field{
-					"id":         {ColName: "id", Type: reflect.TypeOf(int64(0)), GoName: "Id"},
-					"first_name": {ColName: "first_name", Type: reflect.TypeOf(""), GoName: "FirstName"},
-					"age":        {ColName: "age", Type: reflect.TypeOf(int8(0)), GoName: "Age"},
-					"last_name":  {ColName: "last_name", Type: reflect.TypeOf(""), GoName: "LastName"},
+				ColumnMap: map[string]*model.Field{
+					"id":         {ColName: "id", Type: reflect.TypeOf(int64(0)), GoName: "Id", Offset: 0},
+					"first_name": {ColName: "first_name", Type: reflect.TypeOf(""), GoName: "FirstName", Offset: 8},
+					"age":        {ColName: "age", Type: reflect.TypeOf(int8(0)), GoName: "Age", Offset: 24},
+					"last_name":  {ColName: "last_name", Type: reflect.TypeOf(""), GoName: "LastName", Offset: 32},
 				},
 			},
 		},
@@ -102,13 +111,13 @@ func Test_DB(t *testing.T) {
 				}
 				return &ColumnTag{}
 			}(),
-			wantModel: &Model{
+			wantModel: &model.Model{
 				TableName: "column_tag",
-				FieldMap: map[string]*Field{
-					"ID": &Field{ColName: "id_t", Type: reflect.TypeOf(uint64(0)), GoName: "ID"},
+				FieldMap: map[string]*model.Field{
+					"ID": &model.Field{ColName: "id_t", Type: reflect.TypeOf(uint64(0)), GoName: "ID", Offset: 0},
 				},
-				ColumnMap: map[string]*Field{
-					"id_t": &Field{ColName: "id_t", Type: reflect.TypeOf(uint64(0)), GoName: "ID"},
+				ColumnMap: map[string]*model.Field{
+					"id_t": &model.Field{ColName: "id_t", Type: reflect.TypeOf(uint64(0)), GoName: "ID", Offset: 0},
 				},
 			},
 		},
@@ -117,13 +126,13 @@ func Test_DB(t *testing.T) {
 			val: &CustomTableName{
 				FirstName: "firstname",
 			},
-			wantModel: &Model{
+			wantModel: &model.Model{
 				TableName: "test_custom_table_name_t",
-				FieldMap: map[string]*Field{
-					"FirstName": &Field{ColName: "first_name", Type: reflect.TypeOf(""), GoName: "FirstName"},
+				FieldMap: map[string]*model.Field{
+					"FirstName": &model.Field{ColName: "first_name", Type: reflect.TypeOf(""), GoName: "FirstName", Offset: 0},
 				},
-				ColumnMap: map[string]*Field{
-					"first_name": &Field{ColName: "first_name", Type: reflect.TypeOf(""), GoName: "FirstName"},
+				ColumnMap: map[string]*model.Field{
+					"first_name": &model.Field{ColName: "first_name", Type: reflect.TypeOf(""), GoName: "FirstName", Offset: 0},
 				},
 			},
 		},
@@ -137,7 +146,7 @@ func Test_DB(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
+	//r := db.r.(*registry)
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			m, err := db.r.Get(testCase.val)
@@ -163,30 +172,30 @@ func Test_With_XXX(t *testing.T) {
 	testCases := []struct {
 		name      string
 		val       any
-		opts      []ModelOpt
-		wantModel *Model
+		opts      []model.ModelOpt
+		wantModel *model.Model
 		wantErr   error
 	}{
 		{
 			name: "test WithTableName and WithColumnName",
 			val:  &TestModel{},
-			opts: []ModelOpt{
-				WithTableName("with_table_name_test"),
-				WithColumName("Id", "id_user"),
+			opts: []model.ModelOpt{
+				model.WithTableName("with_table_name_test"),
+				model.WithColumName("Id", "id_user"),
 			},
-			wantModel: &Model{
+			wantModel: &model.Model{
 				TableName: "with_table_name_test",
-				FieldMap: map[string]*Field{
-					"Id":        {ColName: "id_user", Type: reflect.TypeOf(int64(0)), GoName: "Id"},
-					"FirstName": {ColName: "first_name", Type: reflect.TypeOf(""), GoName: "FirstName"},
-					"Age":       {ColName: "age", Type: reflect.TypeOf(uint8(0)), GoName: "Age"},
-					"LastName":  {ColName: "last_name", Type: reflect.TypeOf(""), GoName: "LastName"},
+				FieldMap: map[string]*model.Field{
+					"Id":        {ColName: "id_user", Type: reflect.TypeOf(int64(0)), GoName: "Id", Offset: 0},
+					"FirstName": {ColName: "first_name", Type: reflect.TypeOf(""), GoName: "FirstName", Offset: 8},
+					"Age":       {ColName: "age", Type: reflect.TypeOf(uint8(0)), GoName: "Age", Offset: 24},
+					"LastName":  {ColName: "last_name", Type: reflect.TypeOf(""), GoName: "LastName", Offset: 32},
 				},
-				ColumnMap: map[string]*Field{
-					"id_user":    {ColName: "id_user", Type: reflect.TypeOf(int64(0)), GoName: "Id"},
-					"first_name": {ColName: "first_name", Type: reflect.TypeOf(""), GoName: "FirstName"},
-					"age":        {ColName: "age", Type: reflect.TypeOf(uint8(0)), GoName: "Age"},
-					"last_name":  {ColName: "last_name", Type: reflect.TypeOf(""), GoName: "LastName"},
+				ColumnMap: map[string]*model.Field{
+					"id_user":    {ColName: "id_user", Type: reflect.TypeOf(int64(0)), GoName: "Id", Offset: 0},
+					"first_name": {ColName: "first_name", Type: reflect.TypeOf(""), GoName: "FirstName", Offset: 8},
+					"age":        {ColName: "age", Type: reflect.TypeOf(uint8(0)), GoName: "Age", Offset: 24},
+					"last_name":  {ColName: "last_name", Type: reflect.TypeOf(""), GoName: "LastName", Offset: 32},
 				},
 			},
 		},

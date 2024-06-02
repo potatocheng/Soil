@@ -1,6 +1,8 @@
 package orm
 
 import (
+	"Soil/orm/internal/errs"
+	"Soil/orm/internal/model"
 	"errors"
 	"strings"
 )
@@ -8,6 +10,8 @@ import (
 type builder struct {
 	sqlStrBuilder strings.Builder
 	args          []any
+
+	model *model.Model
 }
 
 func (b *builder) buildPredicates(ps []Predicate) error {
@@ -31,8 +35,12 @@ func (b *builder) buildExpression(expr Expression) error {
 
 	switch e := expr.(type) {
 	case Column:
+		field, ok := b.model.FieldMap[e.name]
+		if !ok {
+			return errs.NewErrUnknownField(e.name)
+		}
 		b.sqlStrBuilder.WriteByte('`')
-		b.sqlStrBuilder.WriteString(e.name)
+		b.sqlStrBuilder.WriteString(field.ColName)
 		b.sqlStrBuilder.WriteByte('`')
 	case value:
 		b.sqlStrBuilder.WriteByte('?')

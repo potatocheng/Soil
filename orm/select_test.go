@@ -58,7 +58,7 @@ func TestSelector_Build(t *testing.T) {
 			selector: NewSelector[TestModel](db).From("`test_db`.`test_model`").
 				Where(Col("Age").EQ(18)),
 			wantQuery: &Query{
-				SQL:  "SELECT * FROM `test_db`.`test_model` WHERE `Age` = ?;",
+				SQL:  "SELECT * FROM `test_db`.`test_model` WHERE `age` = ?;",
 				Args: []any{18},
 			},
 		},
@@ -67,7 +67,7 @@ func TestSelector_Build(t *testing.T) {
 			selector: NewSelector[TestModel](db).From("`test_db`.`test_model`").
 				Where(Col("Age").EQ(18).Or(Col("Id").EQ(1))),
 			wantQuery: &Query{
-				SQL:  "SELECT * FROM `test_db`.`test_model` WHERE (`Age` = ?) OR (`Id` = ?);",
+				SQL:  "SELECT * FROM `test_db`.`test_model` WHERE (`age` = ?) OR (`id` = ?);",
 				Args: []any{18, 1},
 			},
 		},

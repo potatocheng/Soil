@@ -7,6 +7,7 @@ import (
 )
 
 func TestDeleter_Build(t *testing.T) {
+
 	type TestModel struct {
 		Id        int64
 		FirstName string

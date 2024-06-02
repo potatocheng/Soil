@@ -12,8 +12,7 @@ type Selector[T any] struct {
 	table string
 	where []Predicate
 
-	model *Model
-	db    *DB
+	db *DB
 }
 
 // Build 生成sql语句和获得参数
@@ -134,62 +133,71 @@ func (s *Selector[T]) Get(ctx context.Context) (*T, error) {
 		return nil, errs.ErrNoRows
 	}
 
-	//将sql数据通过反射转换为go类型
-	columnNames, err := rows.Columns()
-	if err != nil {
-		return nil, err
-	}
-
-	vals := make([]any, 0, len(columnNames))
 	retVal := new(T)
-
-	model, err := s.db.r.Get(retVal)
+	meta, err := s.db.r.Get(retVal)
 	if err != nil {
 		return nil, err
 	}
-	//初始化vals的具体go类型
-	//for _, colName := range columnNames {
-	//	for _, v := range model.FieldMap {
-	//		if colName == v.ColName {
-	//			val := reflect.New(v.Type)
-	//			vals = append(vals, val.Interface())
-	//		}
-	//	}
-	//}
-	for _, colName := range columnNames {
-		field, ok := model.ColumnMap[colName]
-		if !ok {
-			return nil, errs.NewErrUnknownColumn(colName)
-		}
-		// New也是返回一个指向该类型的指针，如果要获得这个值要调用Elem()
-		val := reflect.New(field.Type)
-		vals = append(vals, val.Interface())
-	}
-
-	//这里获得vals, vals里存储的是指针
-	err = rows.Scan(vals...)
-	if err != nil {
-		return nil, err
-	}
-
-	//将vals中的数据赋值给结构体t
-	refRetVal := reflect.ValueOf(retVal)
-	//for i, colName := range columnNames {
-	//	for _, v := range model.FieldMap {
-	//		if colName == v.ColName {
-	//			tValue.Elem().FieldByName(v.GoName).Set(reflect.ValueOf(vals[i]).Elem())
-	//		}
-	//	}
-	//}
-	for i, colName := range columnNames {
-		field, ok := model.ColumnMap[colName]
-		if !ok {
-			return nil, errs.NewErrUnknownColumn(colName)
-		}
-		refRetVal.Elem().FieldByName(field.GoName).Set(reflect.ValueOf(vals[i]).Elem())
-	}
+	valuer := s.db.valCreator(retVal, meta)
+	err = valuer.SetColumns(rows)
 
 	return retVal, nil
+	////将sql数据通过反射转换为go类型
+	//columnNames, err := rows.Columns()
+	//if err != nil {
+	//	return nil, err
+	//}
+	//
+	//vals := make([]any, 0, len(columnNames))
+	//retVal := new(T)
+	//
+	//model, err := s.db.r.Get(retVal)
+	//if err != nil {
+	//	return nil, err
+	//}
+	////初始化vals的具体go类型
+	////for _, colName := range columnNames {
+	////	for _, v := range model.FieldMap {
+	////		if colName == v.ColName {
+	////			val := reflect.New(v.Type)
+	////			vals = append(vals, val.Interface())
+	////		}
+	////	}
+	////}
+	//for _, colName := range columnNames {
+	//	field, ok := model.ColumnMap[colName]
+	//	if !ok {
+	//		return nil, errs.NewErrUnknownColumn(colName)
+	//	}
+	//	// New也是返回一个指向该类型的指针，如果要获得这个值要调用Elem()
+	//	val := reflect.New(field.Type)
+	//	vals = append(vals, val.Interface())
+	//}
+	//
+	////这里获得vals, vals里存储的是指针
+	//err = rows.Scan(vals...)
+	//if err != nil {
+	//	return nil, err
+	//}
+	//
+	////将vals中的数据赋值给结构体t
+	//refRetVal := reflect.ValueOf(retVal)
+	////for i, colName := range columnNames {
+	////	for _, v := range model.FieldMap {
+	////		if colName == v.ColName {
+	////			tValue.Elem().FieldByName(v.GoName).Set(reflect.ValueOf(vals[i]).Elem())
+	////		}
+	////	}
+	////}
+	//for i, colName := range columnNames {
+	//	field, ok := model.ColumnMap[colName]
+	//	if !ok {
+	//		return nil, errs.NewErrUnknownColumn(colName)
+	//	}
+	//	refRetVal.Elem().FieldByName(field.GoName).Set(reflect.ValueOf(vals[i]).Elem())
+	//}
+	//
+	//return retVal, nil
 }
 
 func NewSelector[T any](db *DB) *Selector[T] {

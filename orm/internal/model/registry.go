@@ -1,4 +1,4 @@
-package orm
+package model
 
 import (
 	"Soil/orm/internal/errs"
@@ -22,7 +22,7 @@ type registry struct {
 	models map[reflect.Type]*Model
 }
 
-func newRegistry() *registry {
+func NewRegistry() Registry {
 	return &registry{
 		models: make(map[reflect.Type]*Model),
 	}

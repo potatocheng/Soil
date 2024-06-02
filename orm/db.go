@@ -1,12 +1,17 @@
 package orm
 
-import "database/sql"
+import (
+	"Soil/orm/internal/model"
+	"Soil/orm/internal/valuer"
+	"database/sql"
+)
 
 type DBOption func(*DB)
 
 type DB struct {
-	r  *registry
-	db *sql.DB
+	r          model.Registry
+	db         *sql.DB
+	valCreator valuer.Creator //
 }
 
 func Open(driverName string, dataSourceName string, opts ...DBOption) (*DB, error) {
@@ -20,8 +25,9 @@ func Open(driverName string, dataSourceName string, opts ...DBOption) (*DB, erro
 
 func OpenDB(db *sql.DB, opts ...DBOption) (*DB, error) {
 	res := &DB{
-		r:  newRegistry(),
-		db: db,
+		r:          model.NewRegistry(),
+		db:         db,
+		valCreator: valuer.NewUnsafeValue,
 	}
 
 	for _, opt := range opts {
@@ -29,4 +35,10 @@ func OpenDB(db *sql.DB, opts ...DBOption) (*DB, error) {
 	}
 
 	return res, nil
+}
+
+func DBUseReflect() DBOption {
+	return func(db *DB) {
+		db.valCreator = valuer.NewReflectValue
+	}
 }

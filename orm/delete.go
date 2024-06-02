@@ -1,11 +1,13 @@
 package orm
 
+import model2 "Soil/orm/internal/model"
+
 type Deleter[T any] struct {
 	builder
 	tableName string
 	where     []Predicate
 
-	model *Model
+	model *model2.Model
 	db    *DB
 }
 
