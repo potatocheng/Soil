@@ -13,14 +13,9 @@ func (o op) String() string {
 	return string(o)
 }
 
-// Expression 是标记接口,结构体实现了expr函数，就是一个expression
-type Expression interface {
-	expr()
-}
-
 func exprOf(e any) Expression {
 	switch exp := e.(type) {
-	case Expression:
+	case Expression: // 这个case目前是在形参为RawExpression时走这里
 		return exp
 	default:
 		return valueOf(exp)

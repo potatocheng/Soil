@@ -3,14 +3,13 @@ package orm
 import (
 	"Soil/orm/internal/errs"
 	"context"
-	"reflect"
-	"unsafe"
 )
 
 type Selector[T any] struct {
 	builder
-	table string
-	where []Predicate
+	table   string
+	where   []Predicate
+	columns []Selectable
 
 	db *DB
 }
@@ -26,9 +25,16 @@ func (s *Selector[T]) Build() (*Query, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.sqlStrBuilder.WriteString("SELECT * FROM ")
+
+	s.sqlStrBuilder.WriteString("SELECT ")
+
+	// 处理SELECT后面跟着的列
+	if err = s.buildColumns(); err != nil {
+		return nil, err
+	}
 
 	// 处理from
+	s.sqlStrBuilder.WriteString(" FROM ")
 	if s.table == "" {
 		//没有调用From，那么table就是T的类型名
 		s.sqlStrBuilder.WriteByte('`')
@@ -67,54 +73,61 @@ func (s *Selector[T]) Where(p ...Predicate) *Selector[T] {
 	return s
 }
 
-func (s *Selector[T]) GetV1(ctx context.Context) (*T, error) {
-	query, err := s.Build()
-	if err != nil {
-		return nil, err
-	}
+// Select 参数传入结构体字段名
+func (s *Selector[T]) Select(cols ...Selectable) *Selector[T] {
+	s.columns = cols
 
-	rows, err := s.db.db.QueryContext(ctx, query.SQL, query.Args...)
-	if err != nil {
-		return nil, err
-	}
-
-	if !rows.Next() {
-		return nil, errs.ErrNoRows
-	}
-
-	//获得数据库返回的列信息
-	colNames, err := rows.Columns()
-	if err != nil {
-		return nil, err
-	}
-
-	// 获得元数据
-	retValuePtr := new(T)
-	meta, err := s.db.r.Get(retValuePtr)
-	if err != nil {
-		return nil, err
-	}
-
-	var vals []any
-	for _, colName := range colNames {
-		field, ok := meta.ColumnMap[colName]
-		if !ok {
-			return nil, errs.NewErrUnknownColumn(colName)
-		}
-
-		// NewAt返回的是指针
-		val := reflect.NewAt(field.Type, unsafe.Pointer(uintptr(reflect.ValueOf(retValuePtr).UnsafePointer())+field.Offset))
-		vals = append(vals, val.Interface())
-	}
-
-	// 应为这里这里的val指向的是字段地址在写入后内容直接在各字段内存中
-	err = rows.Scan(vals...)
-	if err != nil {
-		return nil, err
-	}
-
-	return retValuePtr, nil
+	return s
 }
+
+//func (s *Selector[T]) GetV1(ctx context.Context) (*T, error) {
+//	query, err := s.Build()
+//	if err != nil {
+//		return nil, err
+//	}
+//
+//	rows, err := s.db.db.QueryContext(ctx, query.SQL, query.Args...)
+//	if err != nil {
+//		return nil, err
+//	}
+//
+//	if !rows.Next() {
+//		return nil, errs.ErrNoRows
+//	}
+//
+//	//获得数据库返回的列信息
+//	colNames, err := rows.Columns()
+//	if err != nil {
+//		return nil, err
+//	}
+//
+//	// 获得元数据
+//	retValuePtr := new(T)
+//	meta, err := s.db.r.Get(retValuePtr)
+//	if err != nil {
+//		return nil, err
+//	}
+//
+//	var vals []any
+//	for _, colName := range colNames {
+//		field, ok := meta.ColumnMap[colName]
+//		if !ok {
+//			return nil, errs.NewErrUnknownColumn(colName)
+//		}
+//
+//		// NewAt返回的是指针
+//		val := reflect.NewAt(field.Type, unsafe.Pointer(uintptr(reflect.ValueOf(retValuePtr).UnsafePointer())+field.Offset))
+//		vals = append(vals, val.Interface())
+//	}
+//
+//	// 应为这里这里的val指向的是字段地址在写入后内容直接在各字段内存中
+//	err = rows.Scan(vals...)
+//	if err != nil {
+//		return nil, err
+//	}
+//
+//	return retValuePtr, nil
+//}
 
 // Get 获得数据库数据，将数据转为go结构体返回
 func (s *Selector[T]) Get(ctx context.Context) (*T, error) {
@@ -204,4 +217,46 @@ func NewSelector[T any](db *DB) *Selector[T] {
 	return &Selector[T]{
 		db: db,
 	}
+}
+
+// Selectable 标记接口，表明这个字段可以作为SELECT XXX 中的内容
+type Selectable interface {
+	Selectable()
+}
+
+func (s *Selector[T]) buildColumns() error {
+	if len(s.columns) == 0 {
+		s.sqlStrBuilder.WriteByte('*')
+		return nil
+	}
+
+	for i, col := range s.columns {
+		if i != 0 {
+			s.sqlStrBuilder.WriteByte(',')
+		}
+		switch expr := col.(type) {
+		case Column:
+			if err := s.buildColumn(expr); err != nil {
+				return err
+			}
+		case Aggregate:
+			s.sqlStrBuilder.WriteString(expr.fn)
+			s.sqlStrBuilder.WriteByte('(')
+			if err := s.buildColumn(Column{name: expr.arg}); err != nil {
+				return err
+			}
+			s.sqlStrBuilder.WriteByte(')')
+			if expr.alias != "" {
+				s.sqlStrBuilder.WriteString(" AS ")
+				s.sqlStrBuilder.WriteByte('`')
+				s.sqlStrBuilder.WriteString(expr.alias)
+				s.sqlStrBuilder.WriteByte('`')
+			}
+		case RawExpression:
+			s.sqlStrBuilder.WriteString(expr.raw)
+			s.args = append(s.args, expr.args...)
+		}
+	}
+
+	return nil
 }

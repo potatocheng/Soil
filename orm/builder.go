@@ -35,13 +35,9 @@ func (b *builder) buildExpression(expr Expression) error {
 
 	switch e := expr.(type) {
 	case Column:
-		field, ok := b.model.FieldMap[e.name]
-		if !ok {
-			return errs.NewErrUnknownField(e.name)
+		if err := b.buildColumn(e); err != nil {
+			return err
 		}
-		b.sqlStrBuilder.WriteByte('`')
-		b.sqlStrBuilder.WriteString(field.ColName)
-		b.sqlStrBuilder.WriteByte('`')
 	case value:
 		b.sqlStrBuilder.WriteByte('?')
 		b.args = append(b.args, e.val)
@@ -58,8 +54,10 @@ func (b *builder) buildExpression(expr Expression) error {
 			b.sqlStrBuilder.WriteByte(')')
 		}
 
-		//处理操作符
-		b.sqlStrBuilder.WriteString(" " + e.op.String() + " ")
+		if e.op.String() != "" {
+			//处理操作符
+			b.sqlStrBuilder.WriteString(" " + e.op.String() + " ")
+		}
 
 		//处理右节点
 		_, isPredicate = e.left.(Predicate)
@@ -72,8 +70,31 @@ func (b *builder) buildExpression(expr Expression) error {
 		if isPredicate {
 			b.sqlStrBuilder.WriteByte(')')
 		}
+	case RawExpression:
+		b.sqlStrBuilder.WriteByte('(')
+		b.sqlStrBuilder.WriteString(e.raw)
+		b.args = append(b.args, e.args...)
+		b.sqlStrBuilder.WriteByte(')')
 	default:
 		return errors.New("orm: 不支持表达式类型")
+	}
+
+	return nil
+}
+
+func (b *builder) buildColumn(col Column) error {
+	field, ok := b.model.FieldMap[col.name]
+	if !ok {
+		return errs.NewErrUnknownField(col.name)
+	}
+	b.sqlStrBuilder.WriteByte('`')
+	b.sqlStrBuilder.WriteString(field.ColName)
+	b.sqlStrBuilder.WriteByte('`')
+	if col.alias != "" {
+		b.sqlStrBuilder.WriteString(" AS ")
+		b.sqlStrBuilder.WriteByte('`')
+		b.sqlStrBuilder.WriteString(col.alias)
+		b.sqlStrBuilder.WriteByte('`')
 	}
 
 	return nil

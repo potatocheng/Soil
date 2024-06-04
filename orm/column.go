@@ -1,10 +1,18 @@
 package orm
 
 type Column struct {
-	name string
+	name  string
+	alias string
 }
 
-func (c Column) expr() {}
+func (c Column) expr()       {}
+func (c Column) Selectable() {}
+
+func (c Column) As(alias string) Column {
+	c.alias = alias
+
+	return c
+}
 
 type value struct {
 	val any
