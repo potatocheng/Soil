@@ -83,6 +83,7 @@ func (r *registry) parseModel(entity any) (*Model, error) {
 	numField := typ.NumField()
 	fields := make(map[string]*Field, numField)
 	columns := make(map[string]*Field, numField)
+	fds := make([]*Field, numField)
 	for i := 0; i < numField; i++ {
 		f := typ.Field(i)
 		tags, err := r.parseTag(f.Tag) //如果有tag列名按照tag设置
@@ -97,6 +98,7 @@ func (r *registry) parseModel(entity any) (*Model, error) {
 		fieldMeta := &Field{ColName: colName, Type: f.Type, GoName: f.Name, Offset: f.Offset}
 		fields[f.Name] = fieldMeta
 		columns[colName] = fieldMeta
+		fds[i] = fieldMeta
 	}
 	// 处理表名
 	var tableName string
@@ -107,7 +109,7 @@ func (r *registry) parseModel(entity any) (*Model, error) {
 	if tableName == "" {
 		tableName = Camel2Case(typ.Name())
 	}
-	return &Model{TableName: tableName, FieldMap: fields, ColumnMap: columns}, nil
+	return &Model{TableName: tableName, FieldMap: fields, ColumnMap: columns, Fields: fds}, nil
 }
 
 // "orm:column(user_t);size(60)"

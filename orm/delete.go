@@ -1,14 +1,11 @@
 package orm
 
-import model2 "Soil/orm/internal/model"
-
 type Deleter[T any] struct {
 	builder
 	tableName string
 	where     []Predicate
 
-	model *model2.Model
-	db    *DB
+	db *DB
 }
 
 func (d *Deleter[T]) Build() (*Query, error) {
@@ -65,6 +62,10 @@ func (d *Deleter[T]) Where(p ...Predicate) *Deleter[T] {
 
 func NewDeleter[T any](db *DB) *Deleter[T] {
 	return &Deleter[T]{
+		builder: builder{
+			quoter:  db.dialect.quoter(),
+			dialect: db.dialect,
+		},
 		db: db,
 	}
 }

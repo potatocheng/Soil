@@ -10,8 +10,9 @@ import (
 type builder struct {
 	sqlStrBuilder strings.Builder
 	args          []any
-
-	model *model.Model
+	model         *model.Model
+	quoter        byte
+	dialect       Dialect
 }
 
 func (b *builder) buildPredicates(ps []Predicate) error {
@@ -87,15 +88,17 @@ func (b *builder) buildColumn(col Column) error {
 	if !ok {
 		return errs.NewErrUnknownField(col.name)
 	}
-	b.sqlStrBuilder.WriteByte('`')
-	b.sqlStrBuilder.WriteString(field.ColName)
-	b.sqlStrBuilder.WriteByte('`')
+	b.quote(field.ColName)
 	if col.alias != "" {
 		b.sqlStrBuilder.WriteString(" AS ")
-		b.sqlStrBuilder.WriteByte('`')
-		b.sqlStrBuilder.WriteString(col.alias)
-		b.sqlStrBuilder.WriteByte('`')
+		b.quote(col.alias)
 	}
 
 	return nil
+}
+
+func (b *builder) quote(name string) {
+	b.sqlStrBuilder.WriteByte(b.quoter)
+	b.sqlStrBuilder.WriteString(name)
+	b.sqlStrBuilder.WriteByte(b.quoter)
 }

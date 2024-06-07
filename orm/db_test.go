@@ -81,6 +81,32 @@ func Test_DB(t *testing.T) {
 						Offset:  32,
 					},
 				},
+				Fields: []*model.Field{
+					{
+						ColName: "id",
+						Type:    reflect.TypeOf(int64(0)),
+						GoName:  "Id",
+						Offset:  0,
+					},
+					{
+						ColName: "first_name",
+						Type:    reflect.TypeOf(""),
+						GoName:  "FirstName",
+						Offset:  8,
+					},
+					{
+						ColName: "age",
+						Type:    reflect.TypeOf(int8(0)),
+						GoName:  "Age",
+						Offset:  24,
+					},
+					{
+						ColName: "last_name",
+						Type:    reflect.TypeOf(""),
+						GoName:  "LastName",
+						Offset:  32,
+					},
+				},
 			},
 		},
 		{
@@ -99,6 +125,12 @@ func Test_DB(t *testing.T) {
 					"first_name": {ColName: "first_name", Type: reflect.TypeOf(""), GoName: "FirstName", Offset: 8},
 					"age":        {ColName: "age", Type: reflect.TypeOf(int8(0)), GoName: "Age", Offset: 24},
 					"last_name":  {ColName: "last_name", Type: reflect.TypeOf(""), GoName: "LastName", Offset: 32},
+				},
+				Fields: []*model.Field{
+					{ColName: "id", Type: reflect.TypeOf(int64(0)), GoName: "Id", Offset: 0},
+					{ColName: "first_name", Type: reflect.TypeOf(""), GoName: "FirstName", Offset: 8},
+					{ColName: "age", Type: reflect.TypeOf(int8(0)), GoName: "Age", Offset: 24},
+					{ColName: "last_name", Type: reflect.TypeOf(""), GoName: "LastName", Offset: 32},
 				},
 			},
 		},
@@ -119,6 +151,9 @@ func Test_DB(t *testing.T) {
 				ColumnMap: map[string]*model.Field{
 					"id_t": &model.Field{ColName: "id_t", Type: reflect.TypeOf(uint64(0)), GoName: "ID", Offset: 0},
 				},
+				Fields: []*model.Field{
+					&model.Field{ColName: "id_t", Type: reflect.TypeOf(uint64(0)), GoName: "ID", Offset: 0},
+				},
 			},
 		},
 		{
@@ -133,6 +168,9 @@ func Test_DB(t *testing.T) {
 				},
 				ColumnMap: map[string]*model.Field{
 					"first_name": &model.Field{ColName: "first_name", Type: reflect.TypeOf(""), GoName: "FirstName", Offset: 0},
+				},
+				Fields: []*model.Field{
+					&model.Field{ColName: "first_name", Type: reflect.TypeOf(""), GoName: "FirstName", Offset: 0},
 				},
 			},
 		},
@@ -196,6 +234,12 @@ func Test_With_XXX(t *testing.T) {
 					"first_name": {ColName: "first_name", Type: reflect.TypeOf(""), GoName: "FirstName", Offset: 8},
 					"age":        {ColName: "age", Type: reflect.TypeOf(uint8(0)), GoName: "Age", Offset: 24},
 					"last_name":  {ColName: "last_name", Type: reflect.TypeOf(""), GoName: "LastName", Offset: 32},
+				},
+				Fields: []*model.Field{
+					{ColName: "id_user", Type: reflect.TypeOf(int64(0)), GoName: "Id", Offset: 0},
+					{ColName: "first_name", Type: reflect.TypeOf(""), GoName: "FirstName", Offset: 8},
+					{ColName: "age", Type: reflect.TypeOf(uint8(0)), GoName: "Age", Offset: 24},
+					{ColName: "last_name", Type: reflect.TypeOf(""), GoName: "LastName", Offset: 32},
 				},
 			},
 		},

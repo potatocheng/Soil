@@ -7,6 +7,7 @@ type Column struct {
 
 func (c Column) expr()       {}
 func (c Column) Selectable() {}
+func (c Column) assign()     {}
 
 func (c Column) As(alias string) Column {
 	c.alias = alias

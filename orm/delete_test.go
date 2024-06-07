@@ -48,7 +48,7 @@ func TestDeleter_Build(t *testing.T) {
 		{
 			name: "simple where",
 			del: NewDeleter[TestModel](db).From("test_model_t").
-				Where(Col("id").EQ(12)),
+				Where(Col("Id").EQ(12)),
 			wantQuery: &Query{
 				SQL:  "DELETE FROM `test_model_t` WHERE `id` = ?;",
 				Args: []any{12},
@@ -57,9 +57,9 @@ func TestDeleter_Build(t *testing.T) {
 		{
 			name: "传入参数是predicate切片的where",
 			del: NewDeleter[TestModel](db).From("test_model_t").
-				Where(Col("id").EQ(12), Col("name").EQ("yi")),
+				Where(Col("Id").EQ(12), Col("LastName").EQ("yi")),
 			wantQuery: &Query{
-				SQL:  "DELETE FROM `test_model_t` WHERE `id` = ? AND `name` = ?;",
+				SQL:  "DELETE FROM `test_model_t` WHERE `id` = ? AND `last_name` = ?;",
 				Args: []any{12, "yi"},
 			},
 		},

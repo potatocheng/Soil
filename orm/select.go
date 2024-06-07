@@ -215,6 +215,10 @@ func (s *Selector[T]) Get(ctx context.Context) (*T, error) {
 
 func NewSelector[T any](db *DB) *Selector[T] {
 	return &Selector[T]{
+		builder: builder{
+			quoter:  db.dialect.quoter(),
+			dialect: db.dialect,
+		},
 		db: db,
 	}
 }
