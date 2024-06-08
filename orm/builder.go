@@ -21,11 +21,7 @@ func (b *builder) buildPredicates(ps []Predicate) error {
 		p = p.And(ps[i])
 	}
 
-	if err := b.buildExpression(p); err != nil {
-		return err
-	}
-
-	return nil
+	return b.buildExpression(p)
 }
 
 // buildExpression 其实是一个前序遍历(左根右)二叉树的过程
@@ -36,12 +32,14 @@ func (b *builder) buildExpression(expr Expression) error {
 
 	switch e := expr.(type) {
 	case Column:
-		if err := b.buildColumn(e); err != nil {
-			return err
-		}
+		// 防止用户在where中使用别名
+		e.alias = ""
+		return b.buildColumn(e)
 	case value:
 		b.sqlStrBuilder.WriteByte('?')
 		b.args = append(b.args, e.val)
+	case Aggregate:
+		return b.buildAggregate(e)
 	case Predicate:
 		//处理左节点
 		_, isPredicate := e.left.(Predicate) //类型断言
@@ -92,6 +90,21 @@ func (b *builder) buildColumn(col Column) error {
 	if col.alias != "" {
 		b.sqlStrBuilder.WriteString(" AS ")
 		b.quote(col.alias)
+	}
+
+	return nil
+}
+
+func (b *builder) buildAggregate(a Aggregate) error {
+	b.sqlStrBuilder.WriteString(a.fn)
+	b.sqlStrBuilder.WriteByte('(')
+	if err := b.buildColumn(Column{name: a.arg}); err != nil {
+		return err
+	}
+	b.sqlStrBuilder.WriteByte(')')
+	if a.alias != "" {
+		b.sqlStrBuilder.WriteString(" AS ")
+		b.quote(a.alias)
 	}
 
 	return nil

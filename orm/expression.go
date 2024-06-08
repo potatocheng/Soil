@@ -23,3 +23,47 @@ func (r RawExpression) AsPredicate() Predicate {
 		left: r,
 	}
 }
+
+type binaryExpression struct {
+	left  Expression
+	op    op
+	right Expression
+}
+
+func (binaryExpression) expr() {}
+
+type MathExpression binaryExpression
+
+func (m MathExpression) expr() {}
+
+func (m MathExpression) Add(val any) MathExpression {
+	return MathExpression{
+		left:  m,
+		op:    opAdd,
+		right: exprOf(val),
+	}
+}
+
+func (m MathExpression) Sub(val any) MathExpression {
+	return MathExpression{
+		left:  m,
+		op:    opSub,
+		right: exprOf(val),
+	}
+}
+
+func (m MathExpression) Multi(val any) MathExpression {
+	return MathExpression{
+		left:  m,
+		op:    opMulti,
+		right: exprOf(val),
+	}
+}
+
+func (m MathExpression) Div(val any) MathExpression {
+	return MathExpression{
+		left:  m,
+		op:    opDiv,
+		right: exprOf(val),
+	}
+}

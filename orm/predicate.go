@@ -3,10 +3,16 @@ package orm
 type op string
 
 const (
-	opEQ  = "="
-	opAnd = "AND"
-	opOr  = "OR"
-	opNOT = "NOT"
+	opEQ    = "="
+	opAnd   = "AND"
+	opOr    = "OR"
+	opNOT   = "NOT"
+	opLT    = "<"
+	opGT    = ">"
+	opAdd   = "+"
+	opSub   = "-"
+	opMulti = "*"
+	opDiv   = "/"
 )
 
 func (o op) String() string {
@@ -22,11 +28,7 @@ func exprOf(e any) Expression {
 	}
 }
 
-type Predicate struct {
-	left  Expression
-	op    op
-	right Expression
-}
+type Predicate binaryExpression
 
 func (Predicate) expr() {}
 

@@ -2,12 +2,9 @@ package orm
 
 import (
 	"Soil/orm/internal/errs"
-	"context"
-	"database/sql"
 	"github.com/DATA-DOG/go-sqlmock"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"testing"
 )
 
@@ -212,59 +209,59 @@ func TestInsert_SQLiteDialect_Build(t *testing.T) {
 	}
 }
 
-func TestInserter_Exec(t *testing.T) {
-	type TestModel struct {
-		Id        int64
-		FirstName string
-		Age       uint8
-		LastName  string
-	}
-	dbSql, err := sql.Open("mysql", "root:yyc167943@tcp(192.168.146.128:3306)/test?charset=utf8")
-	require.NoError(t, err)
-	db, err := OpenDB(dbSql)
-	require.NoError(t, err)
-	defer func() {
-		if err := dbSql.Close(); err != nil {
-			t.Error(err)
-		}
-	}()
-	testCases := []struct {
-		name     string
-		inserter *Inserter[TestModel]
-		wantErr  error
-		affected int64
-	}{
-		{
-			name: "insert simple exec",
-			inserter: NewInserter[TestModel](db).Values(&TestModel{
-				Id:        int64(2),
-				FirstName: "John",
-				Age:       uint8(18),
-				LastName:  "Sam",
-			}),
-			affected: int64(1),
-		},
-		{
-			name: "insert upsert exec",
-			inserter: NewInserter[TestModel](db).Values(&TestModel{
-				Id:        int64(1),
-				FirstName: "John",
-				Age:       uint8(18),
-				LastName:  "Sam",
-			}).OnDuplicateKey().ConflictColumns("Id").Update(Assign("FirstName", "Chan")),
-			affected: int64(2), // ON DUPLICATE KEY UPDATE，它将一个插入和一个更新操作都视为影响了行,这里的值是2
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			res := tc.inserter.Exec(context.Background())
-			affectRows, er := res.RowsAffected()
-			assert.Equal(t, er, tc.wantErr)
-			if er != nil {
-				return
-			}
-			assert.Equal(t, tc.affected, affectRows)
-		})
-	}
-}
+//func TestInserter_Exec(t *testing.T) {
+//	type TestModel struct {
+//		Id        int64
+//		FirstName string
+//		Age       uint8
+//		LastName  string
+//	}
+//	dbSql, err := sql.Open("mysql", "root:yyc167943@tcp(192.168.146.128:3306)/test?charset=utf8")
+//	require.NoError(t, err)
+//	db, err := OpenDB(dbSql)
+//	require.NoError(t, err)
+//	defer func() {
+//		if err := dbSql.Close(); err != nil {
+//			t.Error(err)
+//		}
+//	}()
+//	testCases := []struct {
+//		name     string
+//		inserter *Inserter[TestModel]
+//		wantErr  error
+//		affected int64
+//	}{
+//		{
+//			name: "insert simple exec",
+//			inserter: NewInserter[TestModel](db).Values(&TestModel{
+//				Id:        int64(2),
+//				FirstName: "John",
+//				Age:       uint8(18),
+//				LastName:  "Sam",
+//			}),
+//			affected: int64(1),
+//		},
+//		{
+//			name: "insert upsert exec",
+//			inserter: NewInserter[TestModel](db).Values(&TestModel{
+//				Id:        int64(1),
+//				FirstName: "John",
+//				Age:       uint8(18),
+//				LastName:  "Sam",
+//			}).OnDuplicateKey().ConflictColumns("Id").Update(Assign("FirstName", "Chan")),
+//			affected: int64(2), // ON DUPLICATE KEY UPDATE，它将一个插入和一个更新操作都视为影响了行,这里的值是2
+//		},
+//	}
+//
+//	for _, tc := range testCases {
+//		t.Run(tc.name, func(t *testing.T) {
+//			res := tc.inserter.Exec(context.Background())
+//			affectRows, er := res.RowsAffected()
+//			assert.Equal(t, er, tc.wantErr)
+//			if er != nil {
+//				return
+//			}
+//			assert.Equal(t, tc.affected, affectRows)
+//		})
+//	}
+//}

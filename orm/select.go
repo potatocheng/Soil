@@ -7,11 +7,15 @@ import (
 
 type Selector[T any] struct {
 	builder
+	db      *DB
 	table   string
 	where   []Predicate
 	columns []Selectable
-
-	db *DB
+	groupBy []Column
+	having  []Predicate
+	orderBy []OrderBy
+	offset  int
+	limit   int
 }
 
 // Build 生成sql语句和获得参数
@@ -37,9 +41,7 @@ func (s *Selector[T]) Build() (*Query, error) {
 	s.sqlStrBuilder.WriteString(" FROM ")
 	if s.table == "" {
 		//没有调用From，那么table就是T的类型名
-		s.sqlStrBuilder.WriteByte('`')
-		s.sqlStrBuilder.WriteString(s.model.TableName)
-		s.sqlStrBuilder.WriteByte('`')
+		s.quote(s.model.TableName)
 	} else {
 		//调用了From，初始化了table
 		s.sqlStrBuilder.WriteString(s.table)
@@ -52,6 +54,45 @@ func (s *Selector[T]) Build() (*Query, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	// 处理GroupBy数据
+	if len(s.groupBy) > 0 {
+		s.sqlStrBuilder.WriteString(" GROUP BY ")
+		for idx, groupCol := range s.groupBy {
+			if idx > 0 {
+				s.sqlStrBuilder.WriteByte(',')
+			}
+			if err = s.buildColumn(groupCol); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// 处理Having条件
+	if len(s.having) > 0 {
+		s.sqlStrBuilder.WriteString(" HAVING ")
+		if err = s.buildPredicates(s.having); err != nil {
+			return nil, err
+		}
+	}
+
+	// 处理Order BY
+	if len(s.orderBy) > 0 {
+		s.sqlStrBuilder.WriteString(" ORDER BY ")
+		if err = s.buildOrderBy(); err != nil {
+			return nil, err
+		}
+	}
+
+	if s.limit > 0 {
+		s.sqlStrBuilder.WriteString(" LIMIT ?")
+		s.args = append(s.args, s.limit)
+	}
+
+	if s.offset > 0 {
+		s.sqlStrBuilder.WriteString(" OFFSET ?")
+		s.args = append(s.args, s.offset)
 	}
 
 	s.sqlStrBuilder.WriteByte(';')
@@ -129,7 +170,7 @@ func (s *Selector[T]) Select(cols ...Selectable) *Selector[T] {
 //	return retValuePtr, nil
 //}
 
-// Get 获得数据库数据，将数据转为go结构体返回
+// Get 获得数据库数据，将数据转为go结构体返回(结果集处理)
 func (s *Selector[T]) Get(ctx context.Context) (*T, error) {
 	query, err := s.Build()
 	if err != nil {
@@ -235,7 +276,7 @@ func (s *Selector[T]) buildColumns() error {
 	}
 
 	for i, col := range s.columns {
-		if i != 0 {
+		if i > 0 {
 			s.sqlStrBuilder.WriteByte(',')
 		}
 		switch expr := col.(type) {
@@ -244,17 +285,8 @@ func (s *Selector[T]) buildColumns() error {
 				return err
 			}
 		case Aggregate:
-			s.sqlStrBuilder.WriteString(expr.fn)
-			s.sqlStrBuilder.WriteByte('(')
-			if err := s.buildColumn(Column{name: expr.arg}); err != nil {
+			if err := s.buildAggregate(expr); err != nil {
 				return err
-			}
-			s.sqlStrBuilder.WriteByte(')')
-			if expr.alias != "" {
-				s.sqlStrBuilder.WriteString(" AS ")
-				s.sqlStrBuilder.WriteByte('`')
-				s.sqlStrBuilder.WriteString(expr.alias)
-				s.sqlStrBuilder.WriteByte('`')
 			}
 		case RawExpression:
 			s.sqlStrBuilder.WriteString(expr.raw)
@@ -263,4 +295,58 @@ func (s *Selector[T]) buildColumns() error {
 	}
 
 	return nil
+}
+
+func (s *Selector[T]) GroupBy(column ...Column) *Selector[T] {
+	s.groupBy = column
+
+	return s
+}
+
+func (s *Selector[T]) Having(p ...Predicate) *Selector[T] {
+	s.having = p
+
+	return s
+}
+
+type OrderBy struct {
+	col   string
+	order string
+}
+
+func Asc(col string) OrderBy {
+	return OrderBy{col: col, order: "ASC"}
+}
+
+func Desc(col string) OrderBy {
+	return OrderBy{col: col, order: "DESC"}
+}
+
+func (s *Selector[T]) OrderBy(OrderBys ...OrderBy) *Selector[T] {
+	s.orderBy = OrderBys
+	return s
+}
+
+func (s *Selector[T]) buildOrderBy() error {
+	for idx, o := range s.orderBy {
+		if idx > 0 {
+			s.sqlStrBuilder.WriteByte(',')
+		}
+		if err := s.buildColumn(Col(o.col)); err != nil {
+			return err
+		}
+		s.sqlStrBuilder.WriteString(" " + o.order)
+	}
+
+	return nil
+}
+
+func (s *Selector[T]) Offset(offset int) *Selector[T] {
+	s.offset = offset
+	return s
+}
+
+func (s *Selector[T]) Limit(limit int) *Selector[T] {
+	s.limit = limit
+	return s
 }

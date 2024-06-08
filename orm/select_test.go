@@ -289,6 +289,68 @@ func TestSelector_Select(t *testing.T) {
 				SQL: "SELECT AVG(`age`) AS `avg_age` FROM `test_model`;",
 			},
 		},
+		{
+			name:     "select Group by one column",
+			selector: NewSelector[TestModel](db).Select(Avg("Age").As("avg_age")).GroupBy(Col("Age")),
+			query: &Query{
+				SQL: "SELECT AVG(`age`) AS `avg_age` FROM `test_model` GROUP BY `age`;",
+			},
+		},
+		{
+			name:     "select Group by columns",
+			selector: NewSelector[TestModel](db).Select(Col("FirstName"), Col("Age")).GroupBy(Col("FirstName"), Col("Age")),
+			query: &Query{
+				SQL: "SELECT `first_name`,`age` FROM `test_model` GROUP BY `first_name`,`age`;",
+			},
+		},
+		{
+			name:     "select having columns",
+			selector: NewSelector[TestModel](db).Select(Col("FirstName"), Col("Age")).GroupBy(Col("FirstName"), Col("Age")).Having(Col("Age").GT(18)),
+			query: &Query{
+				SQL:  "SELECT `first_name`,`age` FROM `test_model` GROUP BY `first_name`,`age` HAVING `age` > ?;",
+				Args: []any{18},
+			},
+		},
+		{
+			name:     "select having aggregate",
+			selector: NewSelector[TestModel](db).Select(Col("FirstName"), Col("Age")).GroupBy(Col("FirstName"), Col("Age")).Having(Avg("Age").GT(18)),
+			query: &Query{
+				SQL:  "SELECT `first_name`,`age` FROM `test_model` GROUP BY `first_name`,`age` HAVING AVG(`age`) > ?;",
+				Args: []any{18},
+			},
+		},
+		{
+			name:     "order by",
+			selector: NewSelector[TestModel](db).Select(Col("FirstName"), Col("Age")).GroupBy(Col("FirstName"), Col("Age")).Having(Avg("Age").GT(18)).OrderBy(Desc("FirstName"), Asc("Age")),
+			query: &Query{
+				SQL:  "SELECT `first_name`,`age` FROM `test_model` GROUP BY `first_name`,`age` HAVING AVG(`age`) > ? ORDER BY `first_name` DESC,`age` ASC;",
+				Args: []any{18},
+			},
+		},
+		{
+			name:     "only limit",
+			selector: NewSelector[TestModel](db).Select(Col("FirstName"), Col("Age")).Limit(100),
+			query: &Query{
+				SQL:  "SELECT `first_name`,`age` FROM `test_model` LIMIT ?;",
+				Args: []any{100},
+			},
+		},
+		{
+			name:     "only offset",
+			selector: NewSelector[TestModel](db).Select(Col("FirstName"), Col("Age")).Offset(1000),
+			query: &Query{
+				SQL:  "SELECT `first_name`,`age` FROM `test_model` OFFSET ?;",
+				Args: []any{1000},
+			},
+		},
+		{
+			name:     "limit offset",
+			selector: NewSelector[TestModel](db).Select(Col("FirstName"), Col("Age")).Offset(1000).Limit(100),
+			query: &Query{
+				SQL:  "SELECT `first_name`,`age` FROM `test_model` LIMIT ? OFFSET ?;",
+				Args: []any{100, 1000},
+			},
+		},
 	}
 
 	for _, tc := range testCases {

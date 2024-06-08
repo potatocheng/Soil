@@ -36,3 +36,19 @@ func (c Column) EQ(arg any) Predicate {
 		right: exprOf(arg),
 	}
 }
+
+func (c Column) GT(arg any) Predicate {
+	return Predicate{
+		left:  c,
+		op:    opGT,
+		right: exprOf(arg),
+	}
+}
+
+func (c Column) LT(arg any) Predicate {
+	return Predicate{
+		left:  c,
+		op:    opLT,
+		right: exprOf(arg),
+	}
+}
