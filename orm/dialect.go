@@ -41,12 +41,7 @@ func (m mysqlDialect) buildUpsert(b *builder, upsert *Upsert) error {
 		}
 		switch assign := assign.(type) {
 		case Assignment:
-			err := b.buildColumn(Col(assign.column))
-			if err != nil {
-				return err
-			}
-			b.sqlStrBuilder.WriteString("=?")
-			b.args = append(b.args, assign.val)
+			return b.buildAssignment(assign)
 		case Column:
 			field, ok := b.model.FieldMap[assign.name]
 			if !ok {
@@ -87,12 +82,7 @@ func (s sqliteDialect) buildUpsert(b *builder, upsert *Upsert) error {
 		}
 		switch assign := assign.(type) {
 		case Assignment:
-			err := b.buildColumn(Col(assign.column))
-			if err != nil {
-				return err
-			}
-			b.sqlStrBuilder.WriteString("=?")
-			b.args = append(b.args, assign.val)
+			return b.buildAssignment(assign)
 		case Column:
 			field, ok := b.model.FieldMap[assign.name]
 			if !ok {

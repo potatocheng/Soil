@@ -4,7 +4,6 @@ import (
 	"Soil/orm/internal/errs"
 	"Soil/orm/internal/model"
 	"context"
-	"reflect"
 )
 
 type UpsertBuilder[T any] struct {
@@ -112,19 +111,23 @@ func (i *Inserter[T]) Build() (*Query, error) {
 
 	// 处理VALUES部分,处理参数
 	i.sqlStrBuilder.WriteString(" VALUES ")
-
 	i.args = make([]any, 0, len(fields)*len(i.values)+1)
 	for j, val := range i.values {
 		if j != 0 {
 			i.sqlStrBuilder.WriteByte(',')
 		}
+		valDealer := i.db.valCreator(val, i.model)
 		i.sqlStrBuilder.WriteByte('(')
 		for idx, field := range fields {
 			if idx != 0 {
 				i.sqlStrBuilder.WriteByte(',')
 			}
 			i.sqlStrBuilder.WriteByte('?')
-			i.args = append(i.args, reflect.ValueOf(val).Elem().FieldByName(field.GoName).Interface())
+			fdVal, err := valDealer.GetFieldValue(field.GoName)
+			if err != nil {
+				return nil, err
+			}
+			i.args = append(i.args, fdVal)
 		}
 		i.sqlStrBuilder.WriteByte(')')
 	}

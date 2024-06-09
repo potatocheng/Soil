@@ -2,6 +2,7 @@ package orm
 
 import (
 	"Soil/orm/internal/errs"
+	"fmt"
 	"github.com/DATA-DOG/go-sqlmock"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/assert"
@@ -93,10 +94,7 @@ func TestInsert_Build(t *testing.T) {
 				FirstName: "John",
 				LastName:  "Sam",
 			}),
-			wantQuery: &Query{
-				SQL:  "INSERT INTO `test_model`(`id`,`first_name`,`age`) VALUES (?,?,?);",
-				Args: []any{int64(1), "John", uint8(0)},
-			},
+			wantErr: fmt.Errorf("orm: %s 没有设置值(可以使用Set指定设置了值待修改的列)", "Age"),
 		},
 		{
 			name: "upsert",

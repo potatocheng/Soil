@@ -12,7 +12,7 @@ type reflectValue struct {
 	meta *model.Model
 }
 
-// 接口的静态检查， 函数类型的签名是由其参数类型和返回值类型决定的(和C++一样)
+// 接口的静态检查， 函数类型是由其参数类型和返回值类型决定的(和C++一样)
 var _ Creator = NewReflectValue
 
 // NewReflectValue val只接收指针
@@ -53,4 +53,13 @@ func (r reflectValue) SetColumns(rows *sql.Rows) error {
 	}
 
 	return nil
+}
+
+func (r reflectValue) GetFieldValue(name string) (any, error) {
+	res := r.val.FieldByName(name)
+	if !res.IsValid() {
+		return nil, errs.NewErrUnknownField(name)
+	}
+
+	return res.Interface(), nil
 }

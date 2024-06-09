@@ -41,34 +41,35 @@ func (b *builder) buildExpression(expr Expression) error {
 	case Aggregate:
 		return b.buildAggregate(e)
 	case Predicate:
-		//处理左节点
-		_, isPredicate := e.left.(Predicate) //类型断言
-		if isPredicate {
-			b.sqlStrBuilder.WriteByte('(')
-		}
-		if err := b.buildExpression(e.left); err != nil {
-			return err
-		}
-		if isPredicate {
-			b.sqlStrBuilder.WriteByte(')')
-		}
-
-		if e.op.String() != "" {
-			//处理操作符
-			b.sqlStrBuilder.WriteString(" " + e.op.String() + " ")
-		}
-
-		//处理右节点
-		_, isPredicate = e.left.(Predicate)
-		if isPredicate {
-			b.sqlStrBuilder.WriteByte('(')
-		}
-		if err := b.buildExpression(e.right); err != nil {
-			return err
-		}
-		if isPredicate {
-			b.sqlStrBuilder.WriteByte(')')
-		}
+		////处理左节点
+		//_, isPredicate := e.left.(Predicate) //类型断言
+		//if isPredicate {
+		//	b.sqlStrBuilder.WriteByte('(')
+		//}
+		//if err := b.buildExpression(e.left); err != nil {
+		//	return err
+		//}
+		//if isPredicate {
+		//	b.sqlStrBuilder.WriteByte(')')
+		//}
+		//
+		//if e.op.String() != "" {
+		//	//处理操作符
+		//	b.sqlStrBuilder.WriteString(" " + e.op.String() + " ")
+		//}
+		//
+		////处理右节点
+		//_, isPredicate = e.left.(Predicate)
+		//if isPredicate {
+		//	b.sqlStrBuilder.WriteByte('(')
+		//}
+		//if err := b.buildExpression(e.right); err != nil {
+		//	return err
+		//}
+		//if isPredicate {
+		//	b.sqlStrBuilder.WriteByte(')')
+		//}
+		return b.buildBinaryExpr(binaryExpression(e))
 	case RawExpression:
 		b.sqlStrBuilder.WriteByte('(')
 		b.sqlStrBuilder.WriteString(e.raw)
@@ -76,6 +77,38 @@ func (b *builder) buildExpression(expr Expression) error {
 		b.sqlStrBuilder.WriteByte(')')
 	default:
 		return errors.New("orm: 不支持表达式类型")
+	}
+
+	return nil
+}
+
+func (b *builder) buildBinaryExpr(e binaryExpression) error {
+	err := b.buildSubExpr(e.left)
+	if err != nil {
+		return err
+	}
+	if e.op != "" {
+		b.sqlStrBuilder.WriteString(" " + e.op.String() + " ")
+	}
+	if e.right != nil {
+		return b.buildSubExpr(e.right)
+	}
+
+	return nil
+}
+
+func (b *builder) buildSubExpr(subExpr Expression) error {
+	switch expr := subExpr.(type) {
+	case Predicate:
+		b.sqlStrBuilder.WriteByte('(')
+		if err := b.buildBinaryExpr(binaryExpression(expr)); err != nil {
+			return err
+		}
+		b.sqlStrBuilder.WriteByte(')')
+	default:
+		if err := b.buildExpression(expr); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -114,4 +147,12 @@ func (b *builder) quote(name string) {
 	b.sqlStrBuilder.WriteByte(b.quoter)
 	b.sqlStrBuilder.WriteString(name)
 	b.sqlStrBuilder.WriteByte(b.quoter)
+}
+
+func (b *builder) buildAssignment(assign Assignment) error {
+	if err := b.buildColumn(Col(assign.column)); err != nil {
+		return err
+	}
+	b.sqlStrBuilder.WriteByte('=')
+	return b.buildExpression(assign.val)
 }

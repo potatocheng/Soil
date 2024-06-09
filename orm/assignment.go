@@ -7,7 +7,7 @@ type Assignable interface {
 
 type Assignment struct {
 	column string
-	val    any
+	val    Expression
 }
 
 // 实现标记接口
@@ -16,6 +16,6 @@ func (a Assignment) assign() {}
 func Assign(column string, val any) Assignment {
 	return Assignment{
 		column: column,
-		val:    val,
+		val:    exprOf(val),
 	}
 }
