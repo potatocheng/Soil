@@ -1,11 +1,16 @@
 package orm
 
+import (
+	"context"
+	"database/sql"
+)
+
 type Deleter[T any] struct {
 	builder
 	tableName string
 	where     []Predicate
 
-	db *DB
+	session Session
 }
 
 func (d *Deleter[T]) Build() (*Query, error) {
@@ -14,19 +19,17 @@ func (d *Deleter[T]) Build() (*Query, error) {
 		err error
 	)
 
-	d.model, err = d.db.r.Get(&t)
+	d.model, err = d.r.Get(&t)
 	if err != nil {
 		return nil, err
 	}
 
-	d.sqlStrBuilder.WriteString("DELETE FROM")
+	d.sqlStrBuilder.WriteString("DELETE FROM ")
 
 	//处理FROM
-	if d.tableName != "" {
+	if d.tableName == "" {
 		// 用户没有调用From, 直接使用泛型的类型名
-		d.sqlStrBuilder.WriteByte('`')
-		d.sqlStrBuilder.WriteString(d.model.TableName)
-		d.sqlStrBuilder.WriteByte('`')
+		d.quote(d.model.TableName)
 	} else {
 		//用户调用了From, 用户传入什么就使用什么
 		d.sqlStrBuilder.WriteString(d.tableName)
@@ -60,12 +63,36 @@ func (d *Deleter[T]) Where(p ...Predicate) *Deleter[T] {
 	return d
 }
 
-func NewDeleter[T any](db *DB) *Deleter[T] {
+func NewDeleter[T any](session Session) *Deleter[T] {
+	c := session.getCore()
 	return &Deleter[T]{
 		builder: builder{
-			quoter:  db.dialect.quoter(),
-			dialect: db.dialect,
+			core:   c,
+			quoter: c.dialect.quoter(),
 		},
-		db: db,
+		session: session,
+	}
+}
+
+func (d *Deleter[T]) Exec(ctx context.Context) Result {
+	var err error
+	d.model, err = d.r.Get(new(T))
+	if err != nil {
+		return Result{err: err}
+	}
+
+	res := exec(ctx, d.core, d.session, &QueryContext{
+		Type:         "DELETE",
+		QueryBuilder: d,
+		Model:        d.model,
+	})
+
+	var sqlRes sql.Result
+	if res.Result != nil {
+		sqlRes = res.Result.(sql.Result)
+	}
+	return Result{
+		err: res.Error,
+		res: sqlRes,
 	}
 }

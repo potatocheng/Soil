@@ -2,17 +2,15 @@ package orm
 
 import (
 	"Soil/orm/internal/errs"
-	"Soil/orm/internal/model"
 	"errors"
 	"strings"
 )
 
 type builder struct {
+	core
 	sqlStrBuilder strings.Builder
 	args          []any
-	model         *model.Model
 	quoter        byte
-	dialect       Dialect
 }
 
 func (b *builder) buildPredicates(ps []Predicate) error {
@@ -115,14 +113,34 @@ func (b *builder) buildSubExpr(subExpr Expression) error {
 }
 
 func (b *builder) buildColumn(col Column) error {
-	field, ok := b.model.FieldMap[col.name]
-	if !ok {
-		return errs.NewErrUnknownField(col.name)
-	}
-	b.quote(field.ColName)
-	if col.alias != "" {
-		b.sqlStrBuilder.WriteString(" AS ")
-		b.quote(col.alias)
+	switch t := col.table.(type) {
+	case nil:
+		field, ok := b.model.FieldMap[col.name]
+		if !ok {
+			return errs.NewErrUnknownField(col.name)
+		}
+		b.quote(field.ColName)
+		if col.alias != "" {
+			b.sqlStrBuilder.WriteString(" AS ")
+			b.quote(col.alias)
+		}
+	case Table:
+		meta, err := b.r.Get(t.entity)
+		if err != nil {
+			return err
+		}
+		field, ok := meta.FieldMap[col.name]
+		if !ok {
+			return errs.NewErrUnknownField(col.name)
+		}
+		if t.alias == "" {
+			b.quote(meta.TableName)
+			b.sqlStrBuilder.WriteByte('.')
+		} else {
+			b.quote(t.alias)
+			b.sqlStrBuilder.WriteByte('.')
+		}
+		b.quote(field.ColName)
 	}
 
 	return nil

@@ -7,8 +7,7 @@ import (
 
 type Selector[T any] struct {
 	builder
-	db      *DB
-	table   string
+	table   TableReference
 	where   []Predicate
 	columns []Selectable
 	groupBy []Column
@@ -16,6 +15,8 @@ type Selector[T any] struct {
 	orderBy []OrderBy
 	offset  int
 	limit   int
+
+	session Session
 }
 
 // Build 生成sql语句和获得参数
@@ -25,7 +26,7 @@ func (s *Selector[T]) Build() (*Query, error) {
 		err error
 	)
 
-	s.model, err = s.db.r.Get(&t)
+	s.model, err = s.r.Get(&t)
 	if err != nil {
 		return nil, err
 	}
@@ -39,12 +40,9 @@ func (s *Selector[T]) Build() (*Query, error) {
 
 	// 处理from
 	s.sqlStrBuilder.WriteString(" FROM ")
-	if s.table == "" {
-		//没有调用From，那么table就是T的类型名
-		s.quote(s.model.TableName)
-	} else {
-		//调用了From，初始化了table
-		s.sqlStrBuilder.WriteString(s.table)
+	err = s.buildTable(s.table)
+	if err != nil {
+		return nil, err
 	}
 
 	// 处理where之后的条件
@@ -102,7 +100,7 @@ func (s *Selector[T]) Build() (*Query, error) {
 	}, nil
 }
 
-func (s *Selector[T]) From(tbl string) *Selector[T] {
+func (s *Selector[T]) From(tbl TableReference) *Selector[T] {
 	s.table = tbl
 
 	return s
@@ -121,146 +119,69 @@ func (s *Selector[T]) Select(cols ...Selectable) *Selector[T] {
 	return s
 }
 
-//func (s *Selector[T]) GetV1(ctx context.Context) (*T, error) {
-//	query, err := s.Build()
-//	if err != nil {
-//		return nil, err
-//	}
-//
-//	rows, err := s.db.db.QueryContext(ctx, query.SQL, query.Args...)
-//	if err != nil {
-//		return nil, err
-//	}
-//
-//	if !rows.Next() {
-//		return nil, errs.ErrNoRows
-//	}
-//
-//	//获得数据库返回的列信息
-//	colNames, err := rows.Columns()
-//	if err != nil {
-//		return nil, err
-//	}
-//
-//	// 获得元数据
-//	retValuePtr := new(T)
-//	meta, err := s.db.r.Get(retValuePtr)
-//	if err != nil {
-//		return nil, err
-//	}
-//
-//	var vals []any
-//	for _, colName := range colNames {
-//		field, ok := meta.ColumnMap[colName]
-//		if !ok {
-//			return nil, errs.NewErrUnknownColumn(colName)
-//		}
-//
-//		// NewAt返回的是指针
-//		val := reflect.NewAt(field.Type, unsafe.Pointer(uintptr(reflect.ValueOf(retValuePtr).UnsafePointer())+field.Offset))
-//		vals = append(vals, val.Interface())
-//	}
-//
-//	// 应为这里这里的val指向的是字段地址在写入后内容直接在各字段内存中
-//	err = rows.Scan(vals...)
-//	if err != nil {
-//		return nil, err
-//	}
-//
-//	return retValuePtr, nil
-//}
-
-// Get 获得数据库数据，将数据转为go结构体返回(结果集处理)
 func (s *Selector[T]) Get(ctx context.Context) (*T, error) {
-	query, err := s.Build()
+	var err error
+	s.model, err = s.r.Get(new(T))
 	if err != nil {
 		return nil, err
+	}
+	res := get[T](ctx, s.session, s.core, &QueryContext{
+		Type:         "SELECT",
+		QueryBuilder: s,
+		Model:        s.model,
+	})
+	if res.Result != nil {
+		return res.Result.(*T), res.Error
+	}
+	return nil, res.Error
+}
+
+func get[T any](ctx context.Context, session Session, c core, qc *QueryContext) *QueryResult {
+	var root Handler = func(ctx context.Context, queryCtx *QueryContext) *QueryResult {
+		return getHandler[T](ctx, session, c, qc)
+	}
+
+	for i := len(c.middlewares) - 1; i >= 0; i-- {
+		root = c.middlewares[i](root)
+	}
+
+	return root(ctx, qc)
+}
+
+func getHandler[T any](ctx context.Context, session Session, c core, qc *QueryContext) *QueryResult {
+	query, err := qc.QueryBuilder.Build()
+	if err != nil {
+		return &QueryResult{Error: err}
 	}
 
 	//执行sql查询语句,
-	rows, err := s.db.db.QueryContext(ctx, query.SQL, query.Args...)
+	rows, err := session.queryContext(ctx, query.SQL, query.Args...)
 	if err != nil {
-		return nil, err
+		return &QueryResult{Error: err}
 	}
 
 	if !rows.Next() {
-		return nil, errs.ErrNoRows
+		return &QueryResult{Error: errs.ErrNoRows}
 	}
 
 	retVal := new(T)
-	meta, err := s.db.r.Get(retVal)
-	if err != nil {
-		return nil, err
-	}
-	valuer := s.db.valCreator(retVal, meta)
+	valuer := c.valCreator(retVal, c.model)
 	err = valuer.SetColumns(rows)
 
-	return retVal, nil
-	////将sql数据通过反射转换为go类型
-	//columnNames, err := rows.Columns()
-	//if err != nil {
-	//	return nil, err
-	//}
-	//
-	//vals := make([]any, 0, len(columnNames))
-	//retVal := new(T)
-	//
-	//model, err := s.db.r.Get(retVal)
-	//if err != nil {
-	//	return nil, err
-	//}
-	////初始化vals的具体go类型
-	////for _, colName := range columnNames {
-	////	for _, v := range model.FieldMap {
-	////		if colName == v.ColName {
-	////			val := reflect.New(v.Type)
-	////			vals = append(vals, val.Interface())
-	////		}
-	////	}
-	////}
-	//for _, colName := range columnNames {
-	//	field, ok := model.ColumnMap[colName]
-	//	if !ok {
-	//		return nil, errs.NewErrUnknownColumn(colName)
-	//	}
-	//	// New也是返回一个指向该类型的指针，如果要获得这个值要调用Elem()
-	//	val := reflect.New(field.Type)
-	//	vals = append(vals, val.Interface())
-	//}
-	//
-	////这里获得vals, vals里存储的是指针
-	//err = rows.Scan(vals...)
-	//if err != nil {
-	//	return nil, err
-	//}
-	//
-	////将vals中的数据赋值给结构体t
-	//refRetVal := reflect.ValueOf(retVal)
-	////for i, colName := range columnNames {
-	////	for _, v := range model.FieldMap {
-	////		if colName == v.ColName {
-	////			tValue.Elem().FieldByName(v.GoName).Set(reflect.ValueOf(vals[i]).Elem())
-	////		}
-	////	}
-	////}
-	//for i, colName := range columnNames {
-	//	field, ok := model.ColumnMap[colName]
-	//	if !ok {
-	//		return nil, errs.NewErrUnknownColumn(colName)
-	//	}
-	//	refRetVal.Elem().FieldByName(field.GoName).Set(reflect.ValueOf(vals[i]).Elem())
-	//}
-	//
-	//return retVal, nil
+	return &QueryResult{
+		Error:  err,
+		Result: retVal,
+	}
 }
 
-func NewSelector[T any](db *DB) *Selector[T] {
+func NewSelector[T any](session Session) *Selector[T] {
+	c := session.getCore()
 	return &Selector[T]{
+		session: session,
 		builder: builder{
-			quoter:  db.dialect.quoter(),
-			dialect: db.dialect,
+			core:   session.getCore(),
+			quoter: c.dialect.quoter(),
 		},
-		db: db,
 	}
 }
 
@@ -349,4 +270,60 @@ func (s *Selector[T]) Offset(offset int) *Selector[T] {
 func (s *Selector[T]) Limit(limit int) *Selector[T] {
 	s.limit = limit
 	return s
+}
+
+func (s *Selector[T]) buildTable(table TableReference) error {
+	switch typ := table.(type) {
+	case nil:
+		s.quote(s.model.TableName)
+	case Table:
+		meta, err := s.r.Get(typ.entity)
+		if err != nil {
+			return err
+		}
+		s.quote(meta.TableName)
+		if typ.alias != "" {
+			s.sqlStrBuilder.WriteString(" AS ")
+			s.quote(typ.alias)
+		}
+	case Join:
+		s.sqlStrBuilder.WriteByte('(')
+		// 处理左节点
+		if err := s.buildTable(typ.left); err != nil {
+			return err
+		}
+		// 处理操作
+		s.sqlStrBuilder.WriteString(" " + typ.typ + " ")
+		// 处理右节点
+		if err := s.buildTable(typ.right); err != nil {
+			return err
+		}
+		// 处理Using
+		if len(typ.using) > 0 {
+			s.sqlStrBuilder.WriteString("USING(")
+			for idx, u := range typ.using {
+				if idx > 0 {
+					s.sqlStrBuilder.WriteByte(',')
+				}
+				if err := s.buildColumn(Col(u)); err != nil {
+					return err
+				}
+			}
+			s.sqlStrBuilder.WriteByte(')') // using的右括号
+		}
+
+		// 处理on部分
+		if len(typ.on) > 0 {
+			s.sqlStrBuilder.WriteString(" ON ")
+			if err := s.buildPredicates(typ.on); err != nil {
+				return err
+			}
+		}
+
+		s.sqlStrBuilder.WriteByte(')') //join的右括号
+	default:
+		return errs.NewErrUnsupportedTable(table)
+	}
+
+	return nil
 }

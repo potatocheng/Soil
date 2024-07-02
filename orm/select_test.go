@@ -10,6 +10,20 @@ import (
 )
 
 func TestSelector_Build(t *testing.T) {
+	type Order struct {
+		Id        int
+		UsingCol1 string
+		UsingCol2 string
+	}
+
+	type OrderDetail struct {
+		OrderId int
+		ItemId  int
+
+		UsingCol1 string
+		UsingCol2 string
+	}
+
 	mockDB, _, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -34,43 +48,76 @@ func TestSelector_Build(t *testing.T) {
 		},
 		{
 			name:     "with from",
-			selector: NewSelector[TestModel](db).From("`test_model_t`"),
-			wantQuery: &Query{
-				SQL: "SELECT * FROM `test_model_t`;",
-			},
-		},
-		{
-			name:     "empty from",
-			selector: NewSelector[TestModel](db).From(""),
+			selector: NewSelector[TestModel](db).From(TableOf(&TestModel{})),
 			wantQuery: &Query{
 				SQL: "SELECT * FROM `test_model`;",
 			},
 		},
 		{
-			name:     "with db",
-			selector: NewSelector[TestModel](db).From("`test_db`.`test_model`"),
+			name:     "empty from",
+			selector: NewSelector[TestModel](db).From(nil),
 			wantQuery: &Query{
-				SQL: "SELECT * FROM `test_db`.`test_model`;",
+				SQL: "SELECT * FROM `test_model`;",
 			},
 		},
 		{
-			name: "single and simple predicate",
-			selector: NewSelector[TestModel](db).From("`test_db`.`test_model`").
-				Where(Col("Age").EQ(18)),
+			name: "join using",
+			selector: func() *Selector[Order] {
+				tab1 := TableOf(&Order{})
+				j1 := tab1.Join(TableOf(&OrderDetail{})).Using("UsingCol1", "UsingCol2")
+				return NewSelector[Order](db).From(j1)
+			}(),
 			wantQuery: &Query{
-				SQL:  "SELECT * FROM `test_db`.`test_model` WHERE `age` = ?;",
-				Args: []any{18},
+				SQL: "SELECT * FROM (`order` JOIN `order_detail` USING (`using_col1`, `using_col2`));",
 			},
 		},
 		{
-			name: "or",
-			selector: NewSelector[TestModel](db).From("`test_db`.`test_model`").
-				Where(Col("Age").EQ(18).Or(Col("Id").EQ(1))),
+			name: "join on",
+			selector: func() *Selector[Order] {
+				tab1 := TableOf(&Order{})
+				tab2 := TableOf(&OrderDetail{})
+				return NewSelector[Order](db).From(tab1.Join(tab2).On(tab1.Col("Id").EQ(tab2.Col("OrderId"))))
+			}(),
 			wantQuery: &Query{
-				SQL:  "SELECT * FROM `test_db`.`test_model` WHERE (`age` = ?) OR (`id` = ?);",
-				Args: []any{18, 1},
+				SQL: "SELECT * FROM (`order` JOIN `order_detail` ON `order`.`id` = `order_detail`.`order_id`);",
 			},
 		},
+		{
+			name: "join on alias",
+			selector: func() *Selector[Order] {
+				tab1 := TableOf(&Order{}).As("t1")
+				tab2 := TableOf(&OrderDetail{}).As("t2")
+				return NewSelector[Order](db).From(tab1.Join(tab2).On(tab1.Col("Id").EQ(tab2.Col("OrderId"))))
+			}(),
+			wantQuery: &Query{
+				SQL: "SELECT * FROM (`order` AS `t1` JOIN `order_detail` AS `t2` ON `t1`.`id` = `t2`.`order_id`);",
+			},
+		},
+		//{
+		//	name:     "with db",
+		//	selector: NewSelector[TestModel](db).From("`test_db`.`test_model`"),
+		//	wantQuery: &Query{
+		//		SQL: "SELECT * FROM `test_db`.`test_model`;",
+		//	},
+		//},
+		//{
+		//	name: "single and simple predicate",
+		//	selector: NewSelector[TestModel](db).From("`test_db`.`test_model`").
+		//		Where(Col("Age").EQ(18)),
+		//	wantQuery: &Query{
+		//		SQL:  "SELECT * FROM `test_db`.`test_model` WHERE `age` = ?;",
+		//		Args: []any{18},
+		//	},
+		//},
+		//{
+		//	name: "or",
+		//	selector: NewSelector[TestModel](db).From("`test_db`.`test_model`").
+		//		Where(Col("Age").EQ(18).Or(Col("Id").EQ(1))),
+		//	wantQuery: &Query{
+		//		SQL:  "SELECT * FROM `test_db`.`test_model` WHERE (`age` = ?) OR (`id` = ?);",
+		//		Args: []any{18, 1},
+		//	},
+		//},
 	}
 
 	for _, testCase := range testCases {

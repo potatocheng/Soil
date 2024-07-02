@@ -4,6 +4,7 @@ import (
 	"Soil/orm/internal/errs"
 	"Soil/orm/internal/model"
 	"context"
+	"database/sql"
 )
 
 type UpsertBuilder[T any] struct {
@@ -35,18 +36,19 @@ type Inserter[T any] struct {
 	builder
 	values  []*T
 	columns []string
-	db      *DB
+	session Session
 
 	upsert *Upsert
 }
 
-func NewInserter[T any](db *DB) *Inserter[T] {
+func NewInserter[T any](session Session) *Inserter[T] {
+	c := session.getCore()
 	return &Inserter[T]{
 		builder: builder{
-			quoter:  db.dialect.quoter(),
-			dialect: db.dialect,
+			core:   c,
+			quoter: c.dialect.quoter(),
 		},
-		db: db,
+		session: session,
 	}
 }
 
@@ -75,7 +77,7 @@ func (i *Inserter[T]) Build() (*Query, error) {
 
 	var err error
 	// 获得元数据
-	i.model, err = i.db.r.Get(new(T))
+	i.model, err = i.r.Get(new(T))
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +118,7 @@ func (i *Inserter[T]) Build() (*Query, error) {
 		if j != 0 {
 			i.sqlStrBuilder.WriteByte(',')
 		}
-		valDealer := i.db.valCreator(val, i.model)
+		valDealer := i.valCreator(val, i.model)
 		i.sqlStrBuilder.WriteByte('(')
 		for idx, field := range fields {
 			if idx != 0 {
@@ -174,12 +176,33 @@ func (i *Inserter[T]) Build() (*Query, error) {
 //		return nil
 //	}
 func (i *Inserter[T]) Exec(ctx context.Context) Result {
-	query, err := i.Build()
+	//query, err := i.Build()
+	//if err != nil {
+	//	return Result{
+	//		err: err,
+	//	}
+	//}
+	//res, err := i.session.execContext(ctx, query.SQL, query.Args...)
+	//return Result{res: res, err: err}
+	var err error
+	i.model, err = i.r.Get(new(T))
 	if err != nil {
-		return Result{
-			err: err,
-		}
+		return Result{err: err}
 	}
-	res, err := i.db.db.ExecContext(ctx, query.SQL, query.Args...)
-	return Result{res: res, err: err}
+
+	res := exec(ctx, i.core, i.session, &QueryContext{
+		Type:         "INSERT",
+		QueryBuilder: i,
+		Model:        i.model,
+	})
+
+	var sqlRes sql.Result
+	if res.Result != nil {
+		sqlRes = res.Result.(sql.Result)
+	}
+
+	return Result{
+		err: res.Error,
+		res: sqlRes,
+	}
 }

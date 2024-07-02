@@ -2,6 +2,7 @@ package orm
 
 type Column struct {
 	name  string
+	table TableReference
 	alias string
 }
 

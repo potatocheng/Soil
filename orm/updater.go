@@ -1,24 +1,28 @@
 package orm
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 )
 
 type Updater[T any] struct {
 	builder
-	db      *DB
 	assigns []Assignable
 	val     *T
 	where   []Predicate
+
+	session Session
 }
 
-func NewUpdater[T any](db *DB) *Updater[T] {
+func NewUpdater[T any](session Session) *Updater[T] {
+	c := session.getCore()
 	return &Updater[T]{
+		session: session,
 		builder: builder{
-			quoter:  db.dialect.quoter(),
-			dialect: db.dialect,
+			core:   c,
+			quoter: c.dialect.quoter(),
 		},
-		db: db,
 	}
 }
 
@@ -28,7 +32,7 @@ func (u *Updater[T]) Build() (*Query, error) {
 		err error
 	)
 
-	if u.model, err = u.db.r.Get(&t); err != nil {
+	if u.model, err = u.r.Get(&t); err != nil {
 		return nil, err
 	}
 
@@ -36,7 +40,7 @@ func (u *Updater[T]) Build() (*Query, error) {
 	u.quote(u.model.TableName)
 
 	// 处理set
-	valDealer := u.db.valCreator(u.val, u.model)
+	valDealer := u.valCreator(u.val, u.model)
 	if len(u.assigns) > 0 {
 		u.sqlStrBuilder.WriteString(" SET ")
 		for idx, assign := range u.assigns {
@@ -116,4 +120,28 @@ func (u *Updater[T]) Update(val *T) *Updater[T] {
 func (u *Updater[T]) Where(where ...Predicate) *Updater[T] {
 	u.where = where
 	return u
+}
+
+func (u *Updater[T]) Exec(ctx context.Context) Result {
+	var err error
+	u.model, err = u.r.Get(new(T))
+	if err != nil {
+		return Result{err: err}
+	}
+
+	res := exec(ctx, u.core, u.session, &QueryContext{
+		Type:         "UPDATE",
+		QueryBuilder: u,
+		Model:        u.model,
+	})
+
+	var sqlRes sql.Result
+	if res.Result != nil {
+		sqlRes = res.Result.(sql.Result)
+	}
+
+	return Result{
+		err: res.Error,
+		res: sqlRes,
+	}
 }

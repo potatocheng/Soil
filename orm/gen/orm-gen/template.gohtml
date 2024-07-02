@@ -1,0 +1,8 @@
+package {{.Package}}
+
+import (
+    "Soil/orm"
+{{- range $idx, $import := .Imports }}
+    {{$import}}
+{{- end -}}
+)
