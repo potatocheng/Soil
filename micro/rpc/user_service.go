@@ -22,11 +22,13 @@ type GetUserByIdResp struct {
 }
 
 type UserServiceServer struct {
+	Msg string
+	Err error
 }
 
 func (u *UserServiceServer) GetUserById(ctx context.Context, in *GetUserByIdReq) (*GetUserByIdResp, error) {
 	log.Println(in)
-	return &GetUserByIdResp{Msg: "Hello World"}, nil
+	return &GetUserByIdResp{Msg: u.Msg}, u.Err
 }
 
 func (u *UserServiceServer) Name() string {

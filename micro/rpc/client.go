@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"Soil/micro/pool"
+	"Soil/micro/rpc/message"
 	"context"
 	"encoding/json"
 	"errors"
@@ -47,27 +48,41 @@ func setFuncFiled(service Service, proxy Proxy) error {
 				// in[0]表示context
 				ctx := in[0].Interface().(context.Context)
 				// in[1]表示参数, 将in[1]序列化
-				reqBs, err := json.Marshal(in[1].Interface())
+				reqData, err := json.Marshal(in[1].Interface())
 				if err != nil {
 					return []reflect.Value{response, reflect.ValueOf(err)}
 				}
-				req := &Request{
+				req := &message.Request{
 					ServiceName: service.Name(),
 					MethodName:  fieldType.Name,
-					Args:        reqBs,
+					Data:        reqData,
 				}
+				req.CalculateHeadLength()
+				req.CalculateBodyLength()
 
 				// 发起调用
 				resp, err := proxy.invoke(ctx, req)
 				if err != nil {
 					return []reflect.Value{response, reflect.ValueOf(err)}
 				}
-				// 解析出response
-				err = json.Unmarshal(resp.Data, response.Interface())
-				if err != nil {
-					return []reflect.Value{response, reflect.ValueOf(err)}
+
+				var businessExecErrVal reflect.Value
+				if len(resp.ErrorInfo) > 0 {
+					// 业务处理出错
+					businessExecErrVal = reflect.ValueOf(errors.New(string(resp.ErrorInfo)))
+				} else {
+					businessExecErrVal = reflect.Zero(reflect.TypeOf(new(error)).Elem())
 				}
-				return []reflect.Value{response, reflect.Zero(reflect.TypeOf(new(error)).Elem())}
+
+				if len(resp.Data) > 0 {
+					// 解析出response
+					err = json.Unmarshal(resp.Data, response.Interface())
+					if err != nil {
+						return []reflect.Value{response, reflect.ValueOf(err)}
+					}
+				}
+
+				return []reflect.Value{response, businessExecErrVal}
 			}
 			fnVal := reflect.MakeFunc(fieldType.Type, fn)
 			fieldValue.Set(fnVal)
@@ -96,20 +111,14 @@ func NewClient(addr string) (*Client, error) {
 }
 
 // invoke 发起请求
-func (c *Client) invoke(ctx context.Context, request *Request) (*Response, error) {
-	requestBs, err := json.Marshal(request)
-	if err != nil {
-		return nil, err
-	}
-
+func (c *Client) invoke(ctx context.Context, request *message.Request) (*message.Response, error) {
+	reqBs := message.EncodeRequest(request)
 	// 将请求发送到服务器
-	resp, err := c.SendAndReceive(requestBs)
+	respStream, err := c.SendAndReceive(reqBs)
 	if err != nil {
 		return nil, err
 	}
-	return &Response{
-		Data: resp,
-	}, nil
+	return message.DecodeResponse(respStream), nil
 }
 
 func (c *Client) SendAndReceive(data []byte) ([]byte, error) {
@@ -126,13 +135,11 @@ func (c *Client) SendAndReceive(data []byte) ([]byte, error) {
 			log.Println("rpc: 将连接放入连接池失败")
 		}
 	}()
-	// 封装数据
-	req := EncapsulatedData(data)
 	// 发送数据
-	_, err = conn.Write(req)
+	_, err = conn.Write(data)
 	if err != nil {
 		return nil, err
 	}
 
-	return Recv(conn)
+	return ReceiveResponseStream(conn)
 }
