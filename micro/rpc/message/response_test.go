@@ -26,7 +26,7 @@ func TestDecodeAndEncodeResponse(t *testing.T) {
 				Version:    1,
 				Compressor: 2,
 				Serializer: 3,
-				ErrorInfo:  "this is an error",
+				ErrorInfo:  []byte("this is an error"),
 			},
 		},
 		{
@@ -46,7 +46,7 @@ func TestDecodeAndEncodeResponse(t *testing.T) {
 				Version:    1,
 				Compressor: 2,
 				Serializer: 3,
-				ErrorInfo:  "this is an error",
+				ErrorInfo:  []byte("this is an error"),
 				Data:       []byte("hello response"),
 			},
 		},
