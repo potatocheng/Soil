@@ -1,17 +1,17 @@
 services:
-  mysql:
-    image: mysql:latest
-    container_name: mysql_latest
-    restart: always
-    command: --mysql-native-password=ON #指定身份验证插件(验证用户身份和原理访问权限的模块)
-    #可以将主机上的文件或目录挂载到容器中，
-    #MySQL容器启动时，会自动执行/docker-entrypoint-initdb.d目录下所有.sql, .sh和.sql.gz文件。
-    volumes:
-      - ./script/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
-    environment:
-      MYSQL_ROOT_PASSWORD: root
-    ports:
-      - "13306:3306" #"13306:3306" 表示将主机上的端口 13306 映射到容器内的端口 3306
+#  mysql:
+#    image: mysql:latest
+#    container_name: mysql_latest
+#    restart: always
+#    command: --mysql-native-password=ON #指定身份验证插件(验证用户身份和原理访问权限的模块)
+#    #可以将主机上的文件或目录挂载到容器中，
+#    #MySQL容器启动时，会自动执行/docker-entrypoint-initdb.d目录下所有.sql, .sh和.sql.gz文件。
+#    volumes:
+#      - ./script/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
+#    environment:
+#      MYSQL_ROOT_PASSWORD: root
+#    ports:
+#      - "13306:3306" #"13306:3306" 表示将主机上的端口 13306 映射到容器内的端口 3306
 
   redis:
    image: redis:latest
@@ -19,6 +19,26 @@ services:
    restart: always
    ports:
      - "6379:6379"
+
+  Etcd:
+    image: bitnami/etcd:latest
+    container_name: etcd
+    environment:
+      - ALLOW_NONE_AUTHENTICATION=yes
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd:2379
+    ports:
+      # 客户端通信接口
+      - 2379:2379
+      # 集群节点通信接口
+      - 2380:2380
+
+  prometheus:
+    image: bitnami/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yaml:/opt/bitnami/prometheus/conf/prometheus.yml
+    ports:
+      - "9090:9090"
 
 #  jaeger:
 #    image: jaegertracing/all-in-one:latest

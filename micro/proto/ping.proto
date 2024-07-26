@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package interaction;
+option  go_package = "./gen";
+
+service interaction {
+  rpc Ping(ping) returns (pong);
+}
+
+message ping {
+  string msg = 1;
+}
+
+message pong {
+  string msg = 1;
+}

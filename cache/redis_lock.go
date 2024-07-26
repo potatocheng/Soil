@@ -169,7 +169,6 @@ func (r *RedisLock) Lock(ctx context.Context, key string,
 	val := uuid.NewString()
 	for {
 		timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
-
 		res, err := r.client.Eval(timeoutCtx, luaLock, []string{key}, val, expiration).Result()
 		cancel()
 		if err != nil && !errors.Is(err, context.DeadlineExceeded) {

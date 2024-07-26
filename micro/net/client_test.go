@@ -21,8 +21,11 @@ func TestClient(t *testing.T) {
 	time.Sleep(time.Second * 3)
 
 	cli := NewClient("tcp", "127.0.0.1:8088")
-	res, err := cli.Communicate("Hello")
-	require.NoError(t, err)
-	log.Printf(res)
-	assert.Equal(t, res, "Hello")
+	for i := 0; i < 10; i++ {
+		res, err := cli.Communicate("Hello")
+		require.NoError(t, err)
+		log.Printf(res)
+		assert.Equal(t, res, "Hello")
+	}
+
 }
