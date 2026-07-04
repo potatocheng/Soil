@@ -45,13 +45,9 @@ func (s *Selector[T]) Build() (*Query, error) {
 		return nil, err
 	}
 
-	// 处理where之后的条件
-	if len(s.where) > 0 {
-		s.sqlStrBuilder.WriteString(" WHERE ")
-		err := s.buildPredicates(s.where)
-		if err != nil {
-			return nil, err
-		}
+	// 处理where之后的条件（含软删除过滤）
+	if err = s.buildWhereWithSoftDelete(s.where); err != nil {
+		return nil, err
 	}
 
 	// 处理GroupBy数据
@@ -86,6 +82,9 @@ func (s *Selector[T]) Build() (*Query, error) {
 	if s.limit > 0 {
 		s.sqlStrBuilder.WriteString(" LIMIT ?")
 		s.args = append(s.args, s.limit)
+	} else if s.offset > 0 {
+		// MySQL 不允许 OFFSET 不带 LIMIT，这里补充一个极大值 LIMIT 表示无限制
+		s.sqlStrBuilder.WriteString(" LIMIT 18446744073709551615")
 	}
 
 	if s.offset > 0 {
@@ -149,6 +148,16 @@ func get[T any](ctx context.Context, session Session, c core, qc *QueryContext) 
 }
 
 func getHandler[T any](ctx context.Context, session Session, c core, qc *QueryContext) *QueryResult {
+	// 提前创建结果实例，便于在其上调用 BeforeQuery 钩子。
+	retVal := new(T)
+
+	// BeforeQuery 钩子：在 Build/Exec 之前调用。
+	if h, ok := any(retVal).(BeforeQuery); ok {
+		if e := h.BeforeQuery(ctx); e != nil {
+			return &QueryResult{Error: e}
+		}
+	}
+
 	query, err := qc.QueryBuilder.Build()
 	if err != nil {
 		return &QueryResult{Error: err}
@@ -159,14 +168,29 @@ func getHandler[T any](ctx context.Context, session Session, c core, qc *QueryCo
 	if err != nil {
 		return &QueryResult{Error: err}
 	}
+	defer rows.Close()
 
 	if !rows.Next() {
 		return &QueryResult{Error: errs.ErrNoRows}
 	}
 
-	retVal := new(T)
 	valuer := c.valCreator(retVal, c.model)
 	err = valuer.SetColumns(rows)
+	if err != nil {
+		return &QueryResult{Error: err}
+	}
+
+	// Get 期望返回单行，若还存在下一行则视为返回了过多数据
+	if rows.Next() {
+		return &QueryResult{Error: errs.ErrTooManyRows}
+	}
+
+	// AfterQuery 钩子：仅在结果填充成功后调用。
+	if h, ok := any(retVal).(AfterQuery); ok {
+		if e := h.AfterQuery(ctx); e != nil {
+			return &QueryResult{Error: e}
+		}
+	}
 
 	return &QueryResult{
 		Error:  err,
@@ -272,6 +296,21 @@ func (s *Selector[T]) Limit(limit int) *Selector[T] {
 	return s
 }
 
+// Paginate 是分页助手：page 从 1 开始（page=1 表示第一页，OFFSET 0），
+// size 为每页大小。page<1 时按 1 处理；size<=0 时按 10 处理。
+// 内部等价于调用 Limit(size) 和 Offset((page-1)*size)，返回 Selector 以便链式调用。
+func (s *Selector[T]) Paginate(page, size int) *Selector[T] {
+	if page < 1 {
+		page = 1
+	}
+	if size <= 0 {
+		size = 10
+	}
+	s.limit = size
+	s.offset = (page - 1) * size
+	return s
+}
+
 func (s *Selector[T]) buildTable(table TableReference) error {
 	switch typ := table.(type) {
 	case nil:
@@ -300,10 +339,10 @@ func (s *Selector[T]) buildTable(table TableReference) error {
 		}
 		// 处理Using
 		if len(typ.using) > 0 {
-			s.sqlStrBuilder.WriteString("USING(")
+			s.sqlStrBuilder.WriteString(" USING (")
 			for idx, u := range typ.using {
 				if idx > 0 {
-					s.sqlStrBuilder.WriteByte(',')
+					s.sqlStrBuilder.WriteString(", ")
 				}
 				if err := s.buildColumn(Col(u)); err != nil {
 					return err

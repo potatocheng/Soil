@@ -1,11 +1,11 @@
 package orm
 
 import (
-	"fmt"
+	"testing"
+
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestUpdater(t *testing.T) {
@@ -62,13 +62,16 @@ func TestUpdater(t *testing.T) {
 			},
 		},
 		{
-			name: "simple update set assign",
+			name: "update with zero last name",
 			updater: NewUpdater[TestModel](db).Update(&TestModel{
 				Id:        int64(1),
 				FirstName: "Jay",
 				Age:       uint8(2),
 			}),
-			wantErr: fmt.Errorf("orm: %s 没有设置值(可以使用Set指定设置了值待修改的列)", "LastName"),
+			wantResult: &Query{
+				SQL:  "UPDATE `test_model` SET `id`=?,`first_name`=?,`age`=?,`last_name`=?;",
+				Args: []any{int64(1), "Jay", uint8(2), ""},
+			},
 		},
 		{
 			name: "update by column",

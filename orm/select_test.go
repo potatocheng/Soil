@@ -4,9 +4,10 @@ import (
 	"Soil/orm/internal/errs"
 	"context"
 	"errors"
+	"testing"
+
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 func TestSelector_Build(t *testing.T) {
@@ -386,7 +387,7 @@ func TestSelector_Select(t *testing.T) {
 			name:     "only offset",
 			selector: NewSelector[TestModel](db).Select(Col("FirstName"), Col("Age")).Offset(1000),
 			query: &Query{
-				SQL:  "SELECT `first_name`,`age` FROM `test_model` OFFSET ?;",
+				SQL:  "SELECT `first_name`,`age` FROM `test_model` LIMIT 18446744073709551615 OFFSET ?;",
 				Args: []any{1000},
 			},
 		},
@@ -410,4 +411,102 @@ func TestSelector_Select(t *testing.T) {
 			assert.Equal(t, tc.query, query)
 		})
 	}
+}
+
+// TestSelector_GetSentinelErrors 验证 Get 路径返回的错误可通过 errors.Is 匹配到
+// 对应的 sentinel（ErrNoRows / ErrTooManyRows）。
+//
+// 说明：Get 的入参为 *sqlmock.Rows，可单元测试；此处为每个子用例独立构造 mock，
+// 避免与 TestSelector_Get 中"先注册全部期望再顺序执行"的模式相互干扰。
+func TestSelector_GetSentinelErrors(t *testing.T) {
+	t.Run("no rows matches ErrNoRows", func(t *testing.T) {
+		mockDB, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		db, err := OpenDB(mockDB)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		mock.ExpectQuery("SELECT .*").
+			WillReturnRows(sqlmock.NewRows([]string{"id", "first_name", "age", "last_name"}))
+
+		_, err = NewSelector[TestModel](db).Get(context.Background())
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !errors.Is(err, errs.ErrNoRows) {
+			t.Fatalf("errors.Is(err, errs.ErrNoRows) = false, err = %v", err)
+		}
+	})
+
+	t.Run("too many rows matches ErrTooManyRows", func(t *testing.T) {
+		mockDB, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		db, err := OpenDB(mockDB)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		rows := sqlmock.NewRows([]string{"id", "first_name", "age", "last_name"})
+		rows.AddRow([]byte("1"), []byte("yang"), []byte("18"), []byte("cheng"))
+		rows.AddRow([]byte("2"), []byte("zhang"), []byte("20"), []byte("san"))
+		mock.ExpectQuery("SELECT .*").WillReturnRows(rows)
+
+		_, err = NewSelector[TestModel](db).Get(context.Background())
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !errors.Is(err, errs.ErrTooManyRows) {
+			t.Fatalf("errors.Is(err, errs.ErrTooManyRows) = false, err = %v", err)
+		}
+	})
+
+	// 静态校验：sentinel 必须已定义且非空，便于在未启用数据库的环境下回归。
+	t.Run("sentinels defined", func(t *testing.T) {
+		if errs.ErrNoRows == nil {
+			t.Fatal("errs.ErrNoRows is nil")
+		}
+		if errs.ErrTooManyRows == nil {
+			t.Fatal("errs.ErrTooManyRows is nil")
+		}
+		if !errors.Is(errs.ErrNoRows, errs.ErrNoRows) {
+			t.Fatal("errs.ErrNoRows must match itself via errors.Is")
+		}
+		if !errors.Is(errs.ErrTooManyRows, errs.ErrTooManyRows) {
+			t.Fatal("errs.ErrTooManyRows must match itself via errors.Is")
+		}
+	})
+}
+
+// TestResult_Err 验证 Result.Err() 能取到底层错误。
+// 由于 Result 的 err 字段为未导出，这里通过导入 orm 包外部无法直接构造，
+// 故仅做最小静态行为校验：零值 Result 的 Err() 应返回 nil。
+func TestResult_Err(t *testing.T) {
+	var r Result
+	if err := r.Err(); err != nil {
+		t.Fatalf("zero-value Result.Err() = %v, want nil", err)
+	}
+}
+
+// TestQueryResult_Err 验证 QueryResult.Err() 能取到底层错误。
+func TestQueryResult_Err(t *testing.T) {
+	t.Run("nil error", func(t *testing.T) {
+		qr := QueryResult{}
+		if err := qr.Err(); err != nil {
+			t.Fatalf("QueryResult.Err() = %v, want nil", err)
+		}
+	})
+	t.Run("with error", func(t *testing.T) {
+		qr := QueryResult{Error: errs.ErrTooManyRows}
+		if err := qr.Err(); err != errs.ErrTooManyRows {
+			t.Fatalf("QueryResult.Err() = %v, want %v", err, errs.ErrTooManyRows)
+		}
+		if !errors.Is(qr.Err(), errs.ErrTooManyRows) {
+			t.Fatal("errors.Is should match ErrTooManyRows")
+		}
+	})
 }

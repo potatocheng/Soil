@@ -163,7 +163,9 @@ func (b *builder) buildAggregate(a Aggregate) error {
 
 func (b *builder) quote(name string) {
 	b.sqlStrBuilder.WriteByte(b.quoter)
-	b.sqlStrBuilder.WriteString(name)
+	// 转义内嵌的引号字符，避免表名/列名中包含引号字符时造成 SQL 注入
+	// SQL 标准及 MySQL/SQLite 都是通过将引号字符重复两次来完成转义
+	b.sqlStrBuilder.WriteString(strings.ReplaceAll(name, string(b.quoter), string([]byte{b.quoter, b.quoter})))
 	b.sqlStrBuilder.WriteByte(b.quoter)
 }
 
@@ -173,4 +175,29 @@ func (b *builder) buildAssignment(assign Assignment) error {
 	}
 	b.sqlStrBuilder.WriteByte('=')
 	return b.buildExpression(assign.val)
+}
+
+// buildWhereWithSoftDelete 构造 WHERE 子句。
+// 若模型定义了 DeletedAtField，则自动在 WHERE 最前面追加 `<deleted_at> IS NULL` 谓词，
+// 与用户已有的 WHERE 条件以 AND 组合。无 DeletedAtField 时行为与原来完全一致，
+// 即：无 WHERE 条件时不输出 WHERE，有条件时输出 `WHERE <predicates>`。
+func (b *builder) buildWhereWithSoftDelete(where []Predicate) error {
+	hasSoftDelete := b.model != nil && b.model.DeletedAtField != nil
+	hasUserWhere := len(where) > 0
+	if !hasSoftDelete && !hasUserWhere {
+		return nil
+	}
+	b.sqlStrBuilder.WriteString(" WHERE ")
+	if hasSoftDelete {
+		// 使用模型元数据中的列名，避免硬编码 "deleted_at"
+		b.quote(b.model.DeletedAtField.ColName)
+		b.sqlStrBuilder.WriteString(" IS NULL")
+	}
+	if hasUserWhere {
+		if hasSoftDelete {
+			b.sqlStrBuilder.WriteString(" AND ")
+		}
+		return b.buildPredicates(where)
+	}
+	return nil
 }

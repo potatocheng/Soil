@@ -16,8 +16,9 @@ type Dialect interface {
 type standardSql struct{}
 
 // buildOnDuplicateKey 在标准SQL中，UPSERT语义没有一个正式的标准化语法
+// standardSql 作为基类不实现该方法，由具体的方言（mysqlDialect/sqliteDialect）覆盖
 func (s standardSql) buildUpsert(b *builder, upsert *Upsert) error {
-	panic("implement me")
+	return errs.NewErrUnsupportedFeature("upsert")
 }
 
 // quoter 标准SQL（SQL标准）规定的引用标识符（quote identifier）是双引号（""）

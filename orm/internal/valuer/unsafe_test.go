@@ -8,6 +8,58 @@ import (
 	"testing"
 )
 
+func Test_unsafeValue_GetFieldValue(t *testing.T) {
+	registry := model.NewRegistry()
+	meta, err := registry.Get(&SimpleStruct{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("零值字段可正常获取", func(t *testing.T) {
+		// 全部字段都是零值的结构体
+		entity := &SimpleStruct{}
+		val := NewUnsafeValue(entity, meta)
+
+		// 验证各类零值字段获取不报错，且返回对应的零值
+		testCases := []struct {
+			name    string
+			wantVal any
+		}{
+			{"Id", uint64(0)},
+			{"Bool", false},
+			{"Int", int(0)},
+			{"String", ""},
+			{"Float64", float64(0)},
+			{"Uint32", uint32(0)},
+			{"Byte", byte(0)},
+		}
+
+		for _, tc := range testCases {
+			got, err := val.GetFieldValue(tc.name)
+			assert.NoError(t, err, "字段 %s 的零值不应报错", tc.name)
+			assert.Equal(t, tc.wantVal, got, "字段 %s 的零值不匹配", tc.name)
+		}
+	})
+
+	t.Run("已设置值字段可正常获取", func(t *testing.T) {
+		entity := NewSimpleStruct(1)
+		val := NewUnsafeValue(entity, meta)
+		got, err := val.GetFieldValue("Id")
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(1), got)
+		gotStr, err := val.GetFieldValue("String")
+		assert.NoError(t, err)
+		assert.Equal(t, "world", gotStr)
+	})
+
+	t.Run("未知字段返回错误", func(t *testing.T) {
+		entity := &SimpleStruct{}
+		val := NewUnsafeValue(entity, meta)
+		_, err := val.GetFieldValue("NotExist")
+		assert.Error(t, err)
+	})
+}
+
 func Test_unsafeValue_SetColumns(t *testing.T) {
 	testCases := []struct {
 		name    string

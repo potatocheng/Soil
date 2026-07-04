@@ -55,9 +55,13 @@ func (u unsafeValue) GetFieldValue(name string) (any, error) {
 	if !ok {
 		return nil, errs.NewErrUnknownField(name)
 	}
+	// 仅当指针为 nil 时返回错误，零值是合法值不应报错
+	if u.addr == nil {
+		return nil, fmt.Errorf("orm: 获取字段 %s 的值失败，底层指针为 nil", name)
+	}
 	res := reflect.NewAt(field.Type, unsafe.Pointer(uintptr(u.addr)+field.Offset)).Elem()
-	if res.IsZero() {
-		return nil, fmt.Errorf("orm: %s 没有设置值(可以使用Set指定设置了值待修改的列)", name)
+	if !res.CanAddr() {
+		return nil, fmt.Errorf("orm: 获取字段 %s 的值失败，值不可寻址", name)
 	}
 	return res.Interface(), nil
 }

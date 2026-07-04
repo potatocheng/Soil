@@ -3,6 +3,7 @@ package orm
 import (
 	"context"
 	"database/sql"
+	"time"
 )
 
 type Deleter[T any] struct {
@@ -24,6 +25,12 @@ func (d *Deleter[T]) Build() (*Query, error) {
 		return nil, err
 	}
 
+	// 软删除：若模型定义了 DeletedAtField，将 DELETE 改写为
+	// `UPDATE <table> SET deleted_at=? WHERE deleted_at IS NULL [AND <user where>]`。
+	if d.model.DeletedAtField != nil {
+		return d.buildSoftDelete()
+	}
+
 	d.sqlStrBuilder.WriteString("DELETE FROM ")
 
 	//处理FROM
@@ -41,6 +48,32 @@ func (d *Deleter[T]) Build() (*Query, error) {
 		if err = d.buildPredicates(d.where); err != nil {
 			return nil, err
 		}
+	}
+
+	d.sqlStrBuilder.WriteByte(';')
+	return &Query{
+		SQL:  d.sqlStrBuilder.String(),
+		Args: d.args,
+	}, nil
+}
+
+// buildSoftDelete 生成软删除改写后的 UPDATE 语句。
+// 将 deleted_at 列设置为当前时间，并通过 buildWhereWithSoftDelete 追加
+// `deleted_at IS NULL` 过滤，避免重复软删除已删除的行。
+func (d *Deleter[T]) buildSoftDelete() (*Query, error) {
+	d.sqlStrBuilder.WriteString("UPDATE ")
+	if d.tableName == "" {
+		d.quote(d.model.TableName)
+	} else {
+		d.sqlStrBuilder.WriteString(d.tableName)
+	}
+	d.sqlStrBuilder.WriteString(" SET ")
+	d.quote(d.model.DeletedAtField.ColName)
+	d.sqlStrBuilder.WriteString("=?")
+	d.args = append(d.args, time.Now())
+
+	if err := d.buildWhereWithSoftDelete(d.where); err != nil {
+		return nil, err
 	}
 
 	d.sqlStrBuilder.WriteByte(';')

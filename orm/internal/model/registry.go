@@ -84,6 +84,7 @@ func (r *registry) parseModel(entity any) (*Model, error) {
 	fields := make(map[string]*Field, numField)
 	columns := make(map[string]*Field, numField)
 	fds := make([]*Field, numField)
+	m := &Model{FieldMap: fields, ColumnMap: columns, Fields: fds}
 	for i := 0; i < numField; i++ {
 		f := typ.Field(i)
 		tags, err := r.parseTag(f.Tag) //如果有tag列名按照tag设置
@@ -99,6 +100,23 @@ func (r *registry) parseModel(entity any) (*Model, error) {
 		fields[f.Name] = fieldMeta
 		columns[colName] = fieldMeta
 		fds[i] = fieldMeta
+
+		// 识别时间戳/软删除字段：优先通过 tag 标记，其次按 Go 字段名匹配
+		if _, ok := tags[tagKeyCreatedAt]; ok {
+			m.CreatedAtField = fieldMeta
+		} else if f.Name == "CreatedAt" {
+			m.CreatedAtField = fieldMeta
+		}
+		if _, ok := tags[tagKeyUpdatedAt]; ok {
+			m.UpdatedAtField = fieldMeta
+		} else if f.Name == "UpdatedAt" {
+			m.UpdatedAtField = fieldMeta
+		}
+		if _, ok := tags[tagKeyDeletedAt]; ok {
+			m.DeletedAtField = fieldMeta
+		} else if f.Name == "DeletedAt" {
+			m.DeletedAtField = fieldMeta
+		}
 	}
 	// 处理表名
 	var tableName string
@@ -109,7 +127,8 @@ func (r *registry) parseModel(entity any) (*Model, error) {
 	if tableName == "" {
 		tableName = Camel2Case(typ.Name())
 	}
-	return &Model{TableName: tableName, FieldMap: fields, ColumnMap: columns, Fields: fds}, nil
+	m.TableName = tableName
+	return m, nil
 }
 
 // "orm:column(user_t);size(60)"
@@ -140,17 +159,27 @@ func (r *registry) parseTag(tag reflect.StructTag) (map[string]string, error) {
 }
 
 // Camel2Case 驼峰转下划线
+// 规则：
+//   - 前一字符小写、当前字符大写 → 插入下划线（如 UserName → user_name）
+//   - 前一字符大写、当前字符大写、下一字符小写 → 插入下划线（如 IDName → id_name, HTTPServer → http_server）
+//   - 连续的大写字母视为一个词（如 ID → id, HTTP → http）
 func Camel2Case(str string) string {
+	if str == "" {
+		return ""
+	}
 	buffer := bytes.Buffer{}
 	for i, r := range str {
-		if unicode.IsUpper(r) {
-			if i != 0 {
-				buffer.WriteString("_")
+		if i > 0 && unicode.IsUpper(r) {
+			prev := rune(str[i-1])
+			if !unicode.IsUpper(prev) {
+				// 前一字符小写、当前字符大写：user|Name → user_name
+				buffer.WriteByte('_')
+			} else if i+1 < len(str) && unicode.IsLower(rune(str[i+1])) {
+				// 前一字符大写、当前字符大写、下一字符小写：ID|Name → id_name
+				buffer.WriteByte('_')
 			}
-			buffer.WriteRune(unicode.ToLower(r))
-		} else {
-			buffer.WriteRune(r)
 		}
+		buffer.WriteRune(unicode.ToLower(r))
 	}
 	return buffer.String()
 }
