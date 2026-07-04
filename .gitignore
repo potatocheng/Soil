@@ -1,0 +1,17 @@
+# IDE metadata
+.trae/
+.idea/
+.vscode/
+
+# Go build output
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# OS files
+.DS_Store
+Thumbs.db

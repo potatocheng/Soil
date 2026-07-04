@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 type nodeType int
@@ -179,13 +180,14 @@ func (n *node) childOfNonStatic(path string) (*node, bool) {
 }
 
 type router struct {
-	// trees map<http.method, node>
 	trees map[string]*node
+	mu    sync.RWMutex
 }
 
 func newRouter() router {
 	return router{
 		trees: make(map[string]*node),
+		mu:    sync.RWMutex{},
 	}
 }
 
@@ -203,6 +205,9 @@ func (r *router) addRoute(method string, path string, handler HandleFunc) {
 	if path != "/" && path[len(path)-1] == '/' {
 		panic("web: path must not end with '/'")
 	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	root, ok := r.trees[method]
 	//该http方法还没有注册路由树
@@ -237,33 +242,85 @@ func (r *router) addRoute(method string, path string, handler HandleFunc) {
 }
 
 // findRoute 查找路由，在这里了体现路由优先级 静态匹配 > 正则匹配 > 路径参数 > 通配符匹配
+// 返回值语义：
+//   - 正常命中：ok=true, mi.node 有 handler, mi.methodNotAllowed=false
+//   - 405：ok=true, mi.methodNotAllowed=true, mi.allowedMethods 记录允许的方法（mi.node 可能为 nil）
+//   - 404：ok=false, mi=nil（路径在任何方法树都不存在）
 func (r *router) findRoute(method string, path string) (*matchInfo, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	// 先按原逻辑查找指定 method 的树，命中则返回（methodNotAllowed=false）
 	root, ok := r.trees[method]
-	if !ok {
-		return nil, false
+	if ok {
+		mi, matched := findInTree(root, path)
+		if matched {
+			return mi, true
+		}
 	}
 
+	// 指定 method 未命中，遍历所有其它 method 的树，检查路径是否在其它方法下已注册
+	allowedMethods := make([]string, 0, len(r.trees))
+	for m, tree := range r.trees {
+		if m == method {
+			continue
+		}
+		_, matched := findInTree(tree, path)
+		if matched {
+			allowedMethods = append(allowedMethods, m)
+		}
+	}
+
+	if len(allowedMethods) > 0 {
+		return &matchInfo{
+			methodNotAllowed: true,
+			allowedMethods:   allowedMethods,
+		}, true
+	}
+
+	return nil, false
+}
+
+// findInTree 在单棵路由树上查找路径匹配，复用 findRoute 中原有的单树匹配逻辑。
+// 返回 (*matchInfo, true) 表示路径在该树上命中；返回 (nil, false) 表示未命中。
+func findInTree(root *node, path string) (*matchInfo, bool) {
 	if path == "/" {
-		return &matchInfo{node: root}, true
+		return &matchInfo{node: root, matchedPath: "/"}, true
 	}
 
 	segments := strings.Split(strings.Trim(path, "/"), "/")
 	mi := &matchInfo{}
-	for _, segment := range segments {
+	for i, segment := range segments {
 		var child *node
-		child, ok = root.childOf(segment)
+		child, ok := root.childOf(segment)
 		if !ok {
-			//如果注册了通配符路由:"/user/*",那么/user/a/b/c也能匹配/user/*路由
-			if root.typ == nodeTypeAny {
-				mi.node = root
+			if root.starChild != nil && root.starChild.handler != nil {
+				if i == 0 {
+					mi.matchedPath = "/" + root.starChild.path
+				} else {
+					mi.matchedPath += "/" + root.starChild.path
+				}
+				mi.node = root.starChild
 				return mi, true
 			}
 			return nil, false
 		}
 
-		if child.paramName != "" {
-			mi.addValue(child.paramName, path)
+		if i == 0 {
+			mi.matchedPath = "/" + child.path
+		} else {
+			mi.matchedPath += "/" + child.path
 		}
+
+		if child.paramName != "" {
+			mi.addValue(child.paramName, segment)
+		}
+
+		if child.typ == nodeTypeAny && child.handler != nil {
+			mi.node = child
+			return mi, true
+		}
+
 		root = child
 	}
 	mi.node = root
@@ -273,8 +330,14 @@ func (r *router) findRoute(method string, path string) (*matchInfo, bool) {
 // matchInfo node表示匹配上的节点，匹配到children, starChild, regexChild时返回node;
 // paramChild 表示匹配到路径参数，返回的内容类似<id:123>
 type matchInfo struct {
-	node      *node
-	paramPath map[string]string
+	node        *node
+	paramPath   map[string]string
+	matchedPath string
+
+	// methodNotAllowed 标识路径在其它 HTTP method 下已注册，应返回 405
+	methodNotAllowed bool
+	// allowedMethods 当 methodNotAllowed 为 true 时，记录允许的 HTTP 方法列表
+	allowedMethods []string
 }
 
 func (m *matchInfo) addValue(key string, value string) {

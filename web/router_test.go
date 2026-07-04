@@ -2,17 +2,19 @@ package web
 
 import (
 	"fmt"
-	"github.com/stretchr/testify/assert"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func Test_Add_Route(t *testing.T) {
 	mockHandler := func(ctx *Context) {}
 	r := newRouter()
 
-	//测试非法用例
 	assert.PanicsWithValue(t, "web: empty path", func() {
 		r.addRoute(http.MethodGet, "", mockHandler)
 	})
@@ -25,26 +27,22 @@ func Test_Add_Route(t *testing.T) {
 		r.addRoute(http.MethodGet, "abc/", mockHandler)
 	})
 
-	//重复注册根节点
 	r.addRoute(http.MethodGet, "/", mockHandler)
 	assert.PanicsWithValue(t, "web: root already has a handler", func() {
 		r.addRoute(http.MethodGet, "/", mockHandler)
 	})
 
-	//重复注册其他节点
 	r.addRoute(http.MethodGet, "/a/b/c", mockHandler)
 	assert.PanicsWithValue(t, "web: routing conflict", func() {
 		r.addRoute(http.MethodGet, "/a/b/c", mockHandler)
 	})
 
-	//路由中出现//情况，如/a//b/c
 	path := "/a//b/c"
 	expected := fmt.Sprintf("path[%s] invaild, 在路由中不能出现 //这种情况", path)
 	assert.PanicsWithValue(t, expected, func() {
 		r.addRoute(http.MethodGet, "/a//b/c", mockHandler)
 	})
 
-	//测试路径参数，通配符和正则路由的互斥
 	path = "/user/:id"
 	r.addRoute(http.MethodGet, "/user/:id", mockHandler)
 	expected = fmt.Sprintf("web: 非法路由，已有路径参数路由。不允许同时注册通配符路由和参数路由 [%s]", "*")
@@ -80,7 +78,6 @@ func Test_Add_Route(t *testing.T) {
 	})
 
 	r = newRouter()
-	//测试路由的插入是否符合预期
 	testRoutes := []struct {
 		method string
 		path   string
@@ -154,29 +151,24 @@ func (n *node) equal(other *node) (string, bool) {
 		return "目标节点为nil", false
 	}
 
-	//判断节点路径是否相同
 	if n.path != other.path {
 		return fmt.Sprintf("两个节点路径不相同，分别是:[%s], [%s]", n.path, other.path), false
 	}
 
-	//判断节点回调函数是否相同
 	nHandleFunc := reflect.ValueOf(n.handler)
 	otherHandleFunc := reflect.ValueOf(other.handler)
 	if nHandleFunc != otherHandleFunc {
 		return fmt.Sprintf("%s 节点 handler不相等 n %s, other %s", n.path, nHandleFunc.Type().String(), otherHandleFunc.Type().String()), false
 	}
 
-	//判断静态节点是否匹配
 	if len(n.children) != len(other.children) {
 		return fmt.Sprintf("%s 子节点长度不相同", n.path), false
 	}
 
-	//遍历到叶节点直接返回
 	if len(n.children) == 0 {
 		return "", true
 	}
 
-	//判断通配符子节点是否匹配
 	if n.starChild != nil {
 		res, ok := n.starChild.equal(other.starChild)
 		if !ok {
@@ -184,7 +176,6 @@ func (n *node) equal(other *node) (string, bool) {
 		}
 	}
 
-	//判断路径参数是否匹配
 	if n.paramChild != nil {
 		res, ok := n.paramChild.equal(other.paramChild)
 		if !ok {
@@ -192,9 +183,8 @@ func (n *node) equal(other *node) (string, bool) {
 		}
 	}
 
-	//判断正则子节点是否匹配
 	if n.regexChild != nil {
-		res, ok := n.regexChild.equal(other.paramChild)
+		res, ok := n.regexChild.equal(other.regexChild)
 		if !ok {
 			return fmt.Sprintf("%s 正则节点不匹配 %s", n.regexChild.path, res), false
 		}
@@ -246,7 +236,8 @@ func Test_find_router(t *testing.T) {
 			path:     "/user/star/detail/china",
 			want:     true,
 			wantMatchInfo: &matchInfo{
-				node: &node{typ: nodeTypeAny, path: "*", handler: mockHandler},
+				node:        &node{typ: nodeTypeAny, path: "*", handler: mockHandler},
+				matchedPath: "/user/*",
 			},
 		},
 	}
@@ -260,6 +251,7 @@ func Test_find_router(t *testing.T) {
 			}
 
 			assert.Equal(t, c.wantMatchInfo.paramPath, mi.paramPath)
+			assert.Equal(t, c.wantMatchInfo.matchedPath, mi.matchedPath)
 			assert.Equal(t, c.wantMatchInfo.node.path, mi.node.path)
 			n := mi.node
 			wantHandler := reflect.ValueOf(c.wantMatchInfo.node.handler)
@@ -267,4 +259,224 @@ func Test_find_router(t *testing.T) {
 			assert.Equal(t, wantHandler, nVal)
 		})
 	}
+}
+
+func Test_find_router_path_param(t *testing.T) {
+	r := newRouter()
+	mockHandler := func(ctx *Context) {}
+
+	r.addRoute(http.MethodGet, "/user/:id", mockHandler)
+
+	testCases := []struct {
+		testName      string
+		method        string
+		path          string
+		want          bool
+		wantParams    map[string]string
+		wantMatchPath string
+	}{
+		{
+			testName:      "路径参数匹配",
+			method:        http.MethodGet,
+			path:          "/user/123",
+			want:          true,
+			wantParams:    map[string]string{"id": "123"},
+			wantMatchPath: "/user/:id",
+		},
+		{
+			testName:      "路径参数匹配2",
+			method:        http.MethodGet,
+			path:          "/user/abc",
+			want:          true,
+			wantParams:    map[string]string{"id": "abc"},
+			wantMatchPath: "/user/:id",
+		},
+	}
+
+	for _, c := range testCases {
+		t.Run(c.testName, func(t *testing.T) {
+			mi, ok := r.findRoute(c.method, c.path)
+			assert.Equal(t, c.want, ok)
+			if !ok {
+				return
+			}
+			assert.Equal(t, c.wantParams, mi.paramPath)
+			assert.Equal(t, c.wantMatchPath, mi.matchedPath)
+		})
+	}
+}
+
+func Test_find_router_multi_path_param(t *testing.T) {
+	r := newRouter()
+	mockHandler := func(ctx *Context) {}
+
+	r.addRoute(http.MethodGet, "/user/:id/post/:postId", mockHandler)
+
+	testCases := []struct {
+		testName      string
+		method        string
+		path          string
+		want          bool
+		wantParams    map[string]string
+		wantMatchPath string
+	}{
+		{
+			testName:      "多路径参数匹配",
+			method:        http.MethodGet,
+			path:          "/user/123/post/456",
+			want:          true,
+			wantParams:    map[string]string{"id": "123", "postId": "456"},
+			wantMatchPath: "/user/:id/post/:postId",
+		},
+	}
+
+	for _, c := range testCases {
+		t.Run(c.testName, func(t *testing.T) {
+			mi, ok := r.findRoute(c.method, c.path)
+			assert.Equal(t, c.want, ok)
+			if !ok {
+				return
+			}
+			assert.Equal(t, c.wantParams, mi.paramPath)
+			assert.Equal(t, c.wantMatchPath, mi.matchedPath)
+		})
+	}
+}
+
+func Test_find_router_regex(t *testing.T) {
+	r := newRouter()
+	mockHandler := func(ctx *Context) {}
+
+	r.addRoute(http.MethodGet, "/detail/:id(^[0-9]+$)", mockHandler)
+
+	testCases := []struct {
+		testName      string
+		method        string
+		path          string
+		want          bool
+		wantMatchPath string
+	}{
+		{
+			testName:      "正则匹配成功",
+			method:        http.MethodGet,
+			path:          "/detail/12345",
+			want:          true,
+			wantMatchPath: "/detail/:id(^[0-9]+$)",
+		},
+		{
+			testName:      "正则匹配失败",
+			method:        http.MethodGet,
+			path:          "/detail/abc",
+			want:          false,
+			wantMatchPath: "",
+		},
+	}
+
+	for _, c := range testCases {
+		t.Run(c.testName, func(t *testing.T) {
+			mi, ok := r.findRoute(c.method, c.path)
+			assert.Equal(t, c.want, ok)
+			if !ok {
+				return
+			}
+			assert.Equal(t, c.wantMatchPath, mi.matchedPath)
+		})
+	}
+}
+
+func Test_router_concurrent(t *testing.T) {
+	r := newRouter()
+	wg := sync.WaitGroup{}
+	numGoroutines := 100
+
+	wg.Add(numGoroutines)
+	for i := 0; i < numGoroutines; i++ {
+		go func(id int) {
+			defer wg.Done()
+			r.addRoute(http.MethodGet, fmt.Sprintf("/user/%d", id), func(ctx *Context) {})
+		}(i)
+	}
+	wg.Wait()
+
+	wg.Add(numGoroutines)
+	for i := 0; i < numGoroutines; i++ {
+		go func(id int) {
+			defer wg.Done()
+			mi, ok := r.findRoute(http.MethodGet, fmt.Sprintf("/user/%d", id))
+			assert.True(t, ok)
+			assert.NotNil(t, mi.node)
+			assert.NotNil(t, mi.node.handler)
+		}(i)
+	}
+	wg.Wait()
+}
+
+// TestMethodNotAllowed_FindRoute TR-3.1
+// 注册 GET /user/:id，POST /user/123 的 findRoute 返回 methodNotAllowed=true，allowedMethods 含 "GET"
+func TestMethodNotAllowed_FindRoute(t *testing.T) {
+	r := newRouter()
+	mockHandler := func(ctx *Context) {}
+	r.addRoute(http.MethodGet, "/user/:id", mockHandler)
+
+	mi, ok := r.findRoute(http.MethodPost, "/user/123")
+	assert.True(t, ok)
+	assert.NotNil(t, mi)
+	assert.True(t, mi.methodNotAllowed)
+	assert.Contains(t, mi.allowedMethods, http.MethodGet)
+}
+
+// TestMethodNotAllowed_Serve TR-3.2
+// serve 层面，注册 GET /user/:id，用 POST 请求 /user/123 返回 405，响应头 Allow 含 "GET"
+func TestMethodNotAllowed_Serve(t *testing.T) {
+	httpServer := NewHttpServer()
+	httpServer.Get("/user/:id", func(ctx *Context) {
+		ctx.RespString(http.StatusOK, "ok")
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/user/123", nil)
+	w := httptest.NewRecorder()
+	httpServer.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+	assert.Equal(t, "405 method not allowed", w.Body.String())
+	allow := w.Header().Get("Allow")
+	assert.Contains(t, allow, http.MethodGet)
+}
+
+// TestMethodNotAllowed_MultipleMethods TR-3.3
+// 注册 GET/PUT/DELETE /user/:id，POST /user/123 返回 405，Allow 含 "GET, PUT, DELETE"（顺序不限）
+func TestMethodNotAllowed_MultipleMethods(t *testing.T) {
+	httpServer := NewHttpServer()
+	mockHandler := func(ctx *Context) {
+		ctx.RespString(http.StatusOK, "ok")
+	}
+	httpServer.Get("/user/:id", mockHandler)
+	httpServer.Put("/user/:id", mockHandler)
+	httpServer.Delete("/user/:id", mockHandler)
+
+	req := httptest.NewRequest(http.MethodPost, "/user/123", nil)
+	w := httptest.NewRecorder()
+	httpServer.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+	allow := w.Header().Get("Allow")
+	assert.Contains(t, allow, http.MethodGet)
+	assert.Contains(t, allow, http.MethodPut)
+	assert.Contains(t, allow, http.MethodDelete)
+}
+
+// TestMethodNotAllowed_NotFound TR-3.4
+// 完全不存在的路径 /notexist 返回 404 而非 405
+func TestMethodNotAllowed_NotFound(t *testing.T) {
+	httpServer := NewHttpServer()
+	httpServer.Get("/user/:id", func(ctx *Context) {
+		ctx.RespString(http.StatusOK, "ok")
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/notexist", nil)
+	w := httptest.NewRecorder()
+	httpServer.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Equal(t, "404 page not found", w.Body.String())
 }
