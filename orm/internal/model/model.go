@@ -9,6 +9,7 @@ const (
 	tagKeyCreatedAt = "created_at"
 	tagKeyUpdatedAt = "updated_at"
 	tagKeyDeletedAt = "deleted_at"
+	tagKeyVersion   = "version"
 )
 
 type ModelOpt func(model *Model) error
@@ -33,6 +34,11 @@ type Model struct {
 	// 字段名默认为 DeletedAt，可通过 orm:"deleted_at()" tag 标记其它字段。
 	// 通常为 *time.Time 类型，NULL 表示未删除。
 	DeletedAtField *Field
+	// VersionField 乐观锁版本字段，nil 表示模型未定义该字段（不启用乐观锁）。
+	// 字段名默认为 Version，可通过 orm:"version()" tag 标记其它字段。
+	// 字段类型必须为整数族（int/int8/.../int64/uint/.../uint64），否则跳过识别。
+	// UPDATE 时自动追加 version = version + 1 与 WHERE version = ? 条件。
+	VersionField *Field
 }
 
 // Field 列的属性，比如列名，是否是主键...

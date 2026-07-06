@@ -15,6 +15,7 @@ var (
 	ErrInvalidColumn          = errors.New("orm: 非法列")
 	ErrUnsupportedFeature     = errors.New("orm: 不支持的功能")
 	ErrNilPointer             = errors.New("orm: 空指针")
+	ErrOptimisticLock         = errors.New("orm: 乐观锁冲突")
 )
 
 func NewErrUnsupportedExpressionType(exp any) error {

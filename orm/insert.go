@@ -53,6 +53,29 @@ func isFieldZero(val any, field *model.Field) bool {
 	return fv.IsZero()
 }
 
+// setIntFieldIfZero 通过反射将 val（指向结构体的指针）上 field 指定的整数族字段设置为 v，
+// 仅当字段当前为零值时才写入；非零值保留（用户/钩子已显式设置）。
+// 用于 Inserter 在 Exec 阶段自动填充 Version=1：registry 已保证 VersionField 为整数族类型。
+func setIntFieldIfZero(val any, field *model.Field, v int64) error {
+	vElem := reflect.ValueOf(val).Elem()
+	fv := vElem.FieldByName(field.GoName)
+	if !fv.IsValid() {
+		return errs.NewErrUnknownField(field.GoName)
+	}
+	if !fv.CanSet() {
+		return fmt.Errorf("orm: 字段 %s 不可设置", field.GoName)
+	}
+	if !fv.IsZero() {
+		return nil
+	}
+	rv := reflect.ValueOf(v)
+	if !rv.Type().ConvertibleTo(fv.Type()) {
+		return fmt.Errorf("orm: 字段 %s 类型 %s 不支持设置整数值", field.GoName, fv.Type())
+	}
+	fv.Set(rv.Convert(fv.Type()))
+	return nil
+}
+
 type Upsert struct {
 	conflictColumns []string
 	assigns         []Assignable
@@ -251,6 +274,16 @@ func (i *Inserter[T]) Exec(ctx context.Context) Result {
 				if e := setTimestampField(v, i.model.CreatedAtField, now); e != nil {
 					return Result{err: e}
 				}
+			}
+		}
+	}
+
+	// 自动填充 Version：在钩子之后、Build 之前执行，确保乐观锁初始版本号为 1。
+	// 仅在字段为零值时填充，以尊重钩子或用户显式设置的值（如显式 Version=5 不被覆盖）。
+	if i.model.VersionField != nil {
+		for _, v := range i.values {
+			if e := setIntFieldIfZero(v, i.model.VersionField, 1); e != nil {
+				return Result{err: e}
 			}
 		}
 	}

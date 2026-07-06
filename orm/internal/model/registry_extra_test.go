@@ -266,3 +266,117 @@ func TestWithColumName_UnknownColumn(t *testing.T) {
 	assert.True(t, strings.Contains(err.Error(), "Foo"),
 		"err.Error() = %q, want it to contain %q", err.Error(), "Foo")
 }
+
+// ---- 乐观锁 Version 字段识别测试 ----
+
+// versionDefaultModel 使用默认字段名 Version（int 类型，无 tag）。
+type versionDefaultModel struct {
+	Id      int64
+	Version int
+}
+
+// versionTagModel 通过 orm:"version()" tag 在非默认字段名上标记版本字段。
+type versionTagModel struct {
+	Id      int64
+	LockVer int `orm:"version()"`
+}
+
+// versionStringModel 的 Version 字段为 string 类型，非整数族应被静默跳过。
+type versionStringModel struct {
+	Id      int64
+	Version string
+}
+
+// versionInt8Model 等用于验证各整数族类型均能被识别为版本字段。
+type versionInt8Model struct {
+	Id      int64
+	Version int8
+}
+
+type versionInt16Model struct {
+	Id      int64
+	Version int16
+}
+
+type versionInt32Model struct {
+	Id      int64
+	Version int32
+}
+
+type versionInt64Model struct {
+	Id      int64
+	Version int64
+}
+
+type versionUintModel struct {
+	Id      int64
+	Version uint
+}
+
+type versionUint8Model struct {
+	Id      int64
+	Version uint8
+}
+
+type versionUint64Model struct {
+	Id      int64
+	Version uint64
+}
+
+// TestRegister_VersionField 验证 registry 对乐观锁版本字段的识别：
+//   - 默认字段名 Version（int）被识别
+//   - orm:"version()" tag 覆盖字段名识别
+//   - 非整数族类型（string）被静默跳过
+//   - 各整数族类型（int/int8-64、uint/uint8-64）均能被识别
+func TestRegister_VersionField(t *testing.T) {
+	r := NewRegistry()
+
+	t.Run("default field name Version int", func(t *testing.T) {
+		m, err := r.Registry(&versionDefaultModel{})
+		require.NoError(t, err)
+		require.NotNil(t, m.VersionField, "VersionField 应被识别")
+		assert.Equal(t, "Version", m.VersionField.GoName)
+		assert.Equal(t, "version", m.VersionField.ColName)
+	})
+
+	t.Run("tag version() on non-default field", func(t *testing.T) {
+		m, err := r.Registry(&versionTagModel{})
+		require.NoError(t, err)
+		require.NotNil(t, m.VersionField, "VersionField 应通过 tag 识别")
+		assert.Equal(t, "LockVer", m.VersionField.GoName)
+	})
+
+	t.Run("non-integer Version string skipped", func(t *testing.T) {
+		m, err := r.Registry(&versionStringModel{})
+		require.NoError(t, err)
+		assert.Nil(t, m.VersionField, "string 类型的 Version 字段应被静默跳过")
+	})
+
+	t.Run("integer kinds accepted", func(t *testing.T) {
+		// 各整数族类型均应被识别为版本字段
+		cases := []struct {
+			name    string
+			entity  any
+			goName  string
+			wantTyp reflect.Type
+		}{
+			{"int", &versionDefaultModel{}, "Version", reflect.TypeOf(int(0))},
+			{"int8", &versionInt8Model{}, "Version", reflect.TypeOf(int8(0))},
+			{"int16", &versionInt16Model{}, "Version", reflect.TypeOf(int16(0))},
+			{"int32", &versionInt32Model{}, "Version", reflect.TypeOf(int32(0))},
+			{"int64", &versionInt64Model{}, "Version", reflect.TypeOf(int64(0))},
+			{"uint", &versionUintModel{}, "Version", reflect.TypeOf(uint(0))},
+			{"uint8", &versionUint8Model{}, "Version", reflect.TypeOf(uint8(0))},
+			{"uint64", &versionUint64Model{}, "Version", reflect.TypeOf(uint64(0))},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				m, err := r.Registry(tc.entity)
+				require.NoError(t, err)
+				require.NotNil(t, m.VersionField, "%s 类型的 Version 字段应被识别", tc.name)
+				assert.Equal(t, tc.goName, m.VersionField.GoName)
+				assert.Equal(t, tc.wantTyp, m.VersionField.Type)
+			})
+		}
+	})
+}

@@ -117,6 +117,17 @@ func (r *registry) parseModel(entity any) (*Model, error) {
 		} else if f.Name == "DeletedAt" {
 			m.DeletedAtField = fieldMeta
 		}
+		// 识别乐观锁版本字段：优先通过 orm:"version()" tag 标记，其次按 Go 字段名 Version 匹配。
+		// 仅当字段类型为整数族（int/uint 各宽度）时才识别，否则静默跳过以保持 registry 宽容。
+		if _, ok := tags[tagKeyVersion]; ok {
+			if isIntegerKind(f.Type.Kind()) {
+				m.VersionField = fieldMeta
+			}
+		} else if f.Name == "Version" {
+			if isIntegerKind(f.Type.Kind()) {
+				m.VersionField = fieldMeta
+			}
+		}
 	}
 	// 处理表名
 	var tableName string
@@ -129,6 +140,17 @@ func (r *registry) parseModel(entity any) (*Model, error) {
 	}
 	m.TableName = tableName
 	return m, nil
+}
+
+// isIntegerKind 判断 reflect.Kind 是否为整数族（int/int8-64、uint/uint8-64）。
+// 用于乐观锁 VersionField 的类型守卫：非整数族字段将被静默跳过。
+func isIntegerKind(k reflect.Kind) bool {
+	switch k {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return true
+	}
+	return false
 }
 
 // "orm:column(user_t);size(60)"

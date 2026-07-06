@@ -2,6 +2,7 @@ package errs
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -17,6 +18,7 @@ func TestSentinelErrorsAreMatchable(t *testing.T) {
 		{"ErrInvalidColumn", ErrInvalidColumn},
 		{"ErrUnsupportedFeature", ErrUnsupportedFeature},
 		{"ErrNilPointer", ErrNilPointer},
+		{"ErrOptimisticLock", ErrOptimisticLock},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -24,6 +26,18 @@ func TestSentinelErrorsAreMatchable(t *testing.T) {
 				t.Fatalf("errors.Is(%v, %v) = false, want true", tc.err, tc.err)
 			}
 		})
+	}
+}
+
+// TestErrOptimisticLockWrapsSentinel 验证包装了 ErrOptimisticLock 的错误
+// 仍可通过 errors.Is 匹配到 sentinel。
+func TestErrOptimisticLockWrapsSentinel(t *testing.T) {
+	wrapped := fmt.Errorf("update failed: %w", ErrOptimisticLock)
+	if !errors.Is(wrapped, ErrOptimisticLock) {
+		t.Fatalf("errors.Is(wrapped, ErrOptimisticLock) = false, wrapped = %v", wrapped)
+	}
+	if !strings.Contains(wrapped.Error(), "乐观锁冲突") {
+		t.Fatalf("wrapped.Error() = %q, want it to contain %q", wrapped.Error(), "乐观锁冲突")
 	}
 }
 

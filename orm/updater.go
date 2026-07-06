@@ -1,9 +1,13 @@
 package orm
 
 import (
+	"Soil/orm/internal/errs"
+	"Soil/orm/internal/model"
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"reflect"
 	"time"
 )
 
@@ -67,16 +71,34 @@ func (u *Updater[T]) Build() (*Query, error) {
 				u.args = append(u.args, res)
 			}
 		}
+		// 乐观锁：在 SET 末尾追加 version=version+1（DB 端原子自增）。
+		// 仅当模型定义了 VersionField、持有模型实例（Update(val)）且用户未显式 SET version 列时追加。
+		// 批量更新（u.val == nil）场景显式 opt-out，不追加。
+		if u.model.VersionField != nil && u.val != nil && !u.versionColumnExplicitlySet() {
+			u.sqlStrBuilder.WriteString(",")
+			u.quote(u.model.VersionField.ColName)
+			u.sqlStrBuilder.WriteString("=")
+			u.quote(u.model.VersionField.ColName)
+			u.sqlStrBuilder.WriteString("+1")
+		}
 	} else {
 		if u.val == nil {
 			return nil, errors.New("orm: update 没有设置条件")
 		}
 		//NewUpdater[User].Update(&User)--->UPDATE `user` SET (User里的字段)
 		u.sqlStrBuilder.WriteString(" SET ")
-		for idx, field := range u.model.Fields {
-			if idx > 0 {
+		// first 用于正确处理逗号：当 version 字段被跳过时，下一个字段不应产生前导逗号。
+		first := true
+		for _, field := range u.model.Fields {
+			// 跳过 version 字段：循环结束后追加 version=version+1，
+			// 避免在此处写入 version=<当前值>（与自增语义冲突）。
+			if u.model.VersionField != nil && field.GoName == u.model.VersionField.GoName {
+				continue
+			}
+			if !first {
 				u.sqlStrBuilder.WriteString(",")
 			}
+			first = false
 			if err = u.buildColumn(Col(field.GoName)); err != nil {
 				return nil, err
 			}
@@ -88,11 +110,43 @@ func (u *Updater[T]) Build() (*Query, error) {
 			}
 			u.args = append(u.args, v)
 		}
+		// 乐观锁：追加 version=version+1（DB 端原子自增）。
+		// 此分支下 u.val 必非 nil（上方已校验），故仅检查 VersionField。
+		if u.model.VersionField != nil {
+			if !first {
+				u.sqlStrBuilder.WriteString(",")
+			}
+			u.quote(u.model.VersionField.ColName)
+			u.sqlStrBuilder.WriteString("=")
+			u.quote(u.model.VersionField.ColName)
+			u.sqlStrBuilder.WriteString("+1")
+		}
 	}
 
 	// 处理where（含软删除过滤）
 	if err = u.buildWhereWithSoftDelete(u.where); err != nil {
 		return nil, err
+	}
+
+	// 乐观锁：在 WHERE 末尾追加 AND <version_col>=?，参数为通过反射从 u.val 读取的当前版本值。
+	// 仅当模型定义了 VersionField 且持有模型实例（Update(val)）时启用。
+	// buildWhereWithSoftDelete 仅在存在软删除字段或用户 WHERE 时输出 " WHERE "，
+	// 这里据此决定追加 " AND " 还是 " WHERE "。
+	if u.model.VersionField != nil && u.val != nil {
+		hasWhere := u.model.DeletedAtField != nil || len(u.where) > 0
+		if hasWhere {
+			u.sqlStrBuilder.WriteString(" AND ")
+		} else {
+			u.sqlStrBuilder.WriteString(" WHERE ")
+		}
+		u.quote(u.model.VersionField.ColName)
+		u.sqlStrBuilder.WriteString("=?")
+		var verVal any
+		verVal, err = readVersionFromVal(u.val, u.model.VersionField)
+		if err != nil {
+			return nil, err
+		}
+		u.args = append(u.args, verVal)
 	}
 
 	u.sqlStrBuilder.WriteByte(';')
@@ -178,6 +232,18 @@ func (u *Updater[T]) Exec(ctx context.Context) Result {
 		sqlRes = res.Result.(sql.Result)
 	}
 
+	// 乐观锁冲突检测：仅当模型定义了 VersionField 且持有模型实例（Update(val)）时启用。
+	// RowsAffected()==0 表示 WHERE version=? 未命中任何行（版本已被并发事务修改）。
+	// 在 AfterUpdate 钩子之前返回，避免冲突时仍触发后置钩子。
+	if res.Error == nil && u.model.VersionField != nil && u.val != nil {
+		if sqlRes != nil {
+			affected, e := sqlRes.RowsAffected()
+			if e == nil && affected == 0 {
+				return Result{err: errs.ErrOptimisticLock}
+			}
+		}
+	}
+
 	// AfterUpdate 钩子：仅在 SQL 执行成功且持有模型实例时调用。
 	if res.Error == nil && u.val != nil {
 		if h, ok := any(u.val).(AfterUpdate); ok {
@@ -190,5 +256,47 @@ func (u *Updater[T]) Exec(ctx context.Context) Result {
 	return Result{
 		err: res.Error,
 		res: sqlRes,
+	}
+}
+
+// versionColumnExplicitlySet 检查 u.assigns 是否已显式包含对 version 字段的赋值
+// （无论是 Assignment 还是 Column 形式）。若是，则 Build 跳过自动追加 version=version+1，
+// 与 UpdatedAtField 的检测模式保持一致。
+func (u *Updater[T]) versionColumnExplicitlySet() bool {
+	if u.model == nil || u.model.VersionField == nil {
+		return false
+	}
+	name := u.model.VersionField.GoName
+	for _, a := range u.assigns {
+		switch a := a.(type) {
+		case Assignment:
+			if a.column == name {
+				return true
+			}
+		case Column:
+			if a.name == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// readVersionFromVal 通过反射从 val（指向结构体的指针）读取 field 指定的版本字段当前值，返回 int64。
+// registry 已保证 VersionField 为整数族类型（int/int8-64、uint/uint8-64），
+// 这里仍对 Kind 做分支处理以兼容 int 与 uint 各宽度。
+func readVersionFromVal(val any, field *model.Field) (int64, error) {
+	v := reflect.ValueOf(val).Elem()
+	fv := v.FieldByName(field.GoName)
+	if !fv.IsValid() {
+		return 0, errs.NewErrUnknownField(field.GoName)
+	}
+	switch fv.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return fv.Int(), nil
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return int64(fv.Uint()), nil
+	default:
+		return 0, fmt.Errorf("orm: 字段 %s 类型 %s 不是整数族，无法作为版本字段", field.GoName, fv.Type())
 	}
 }
