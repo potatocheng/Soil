@@ -70,13 +70,17 @@ type MiddlewareBuilder struct {
 	capacity int64   // 桶容量（burst）
 	byIP     bool    // 是否按客户端 IP 维度限流；false 为全局限流
 
+	// ttl 为按 IP 限流时单个桶的过期时间。距上次访问超过 ttl 的桶会在
+	// 下次该 IP 请求到达时被懒清理（删除并重建为满桶）。
+	// 0 表示永不过期（向后兼容）。默认 10 秒。
+	ttl time.Duration
+
 	// 全局限流时持有的单个桶
 	bucket *tokenBucket
 
-	// 按 IP 限流时持有的桶集合
-	// 已知限制：该 map 不做 LRU 淘汰，长期运行下不同 IP 数量无上限，
-	// 可能导致内存持续增长。生产环境如需更严格的内存控制，
-	// 应引入过期淘汰策略（如 LRU/TTL）。
+	// 按 IP 限流时持有的桶集合。配合 ttl 实现懒清理：
+	// 请求到达时检查目标桶是否过期，过期则删除并新建满桶。
+	// 内存占用上限约为 rate × ttl 个桶。
 	buckets   map[string]*tokenBucket
 	bucketsMu sync.RWMutex
 }
@@ -88,12 +92,21 @@ func Create(rate float64, capacity int64) *MiddlewareBuilder {
 	return &MiddlewareBuilder{
 		rate:     rate,
 		capacity: capacity,
+		ttl:      10 * time.Second,
 	}
 }
 
 // WithByIP 设置是否按客户端 IP 维度限流。支持链式调用。
 func (mb *MiddlewareBuilder) WithByIP(b bool) *MiddlewareBuilder {
 	mb.byIP = b
+	return mb
+}
+
+// WithTTL 设置按 IP 限流时单个桶的过期时间。支持链式调用。
+// 距上次访问超过 ttl 的桶会在下次该 IP 请求到达时被清理。
+// 传 0 表示永不过期（关闭懒清理，仅在内存充裕且 IP 数量可控时使用）。
+func (mb *MiddlewareBuilder) WithTTL(ttl time.Duration) *MiddlewareBuilder {
+	mb.ttl = ttl
 	return mb
 }
 
@@ -110,21 +123,7 @@ func (mb *MiddlewareBuilder) Build() web.Middleware {
 			var bucket *tokenBucket
 			if mb.byIP {
 				ip := clientIP(ctx.Req)
-				// 先读锁快查，命中则直接复用
-				mb.bucketsMu.RLock()
-				bucket = mb.buckets[ip]
-				mb.bucketsMu.RUnlock()
-				if bucket == nil {
-					// 未命中则加写锁创建，double-check 防止重复创建
-					bucket = newTokenBucket(mb.rate, mb.capacity)
-					mb.bucketsMu.Lock()
-					if existing, ok := mb.buckets[ip]; ok {
-						bucket = existing
-					} else {
-						mb.buckets[ip] = bucket
-					}
-					mb.bucketsMu.Unlock()
-				}
+				bucket = mb.getOrCreateBucket(ip)
 			} else {
 				bucket = mb.bucket
 			}
@@ -146,6 +145,53 @@ func (mb *MiddlewareBuilder) Build() web.Middleware {
 			ctx.Abort(http.StatusTooManyRequests, "Too Many Requests")
 		}
 	}
+}
+
+// getOrCreateBucket 获取或创建指定 IP 的令牌桶。
+// 若桶已过期（距上次访问超过 ttl），则删除旧桶并新建满桶。
+// 采用懒清理策略：仅在请求到达时检查过期，无后台 goroutine。
+func (mb *MiddlewareBuilder) getOrCreateBucket(ip string) *tokenBucket {
+	// 先读锁快查
+	mb.bucketsMu.RLock()
+	bucket := mb.buckets[ip]
+	mb.bucketsMu.RUnlock()
+
+	// 检查是否过期，过期则删除
+	if bucket != nil && mb.isBucketExpired(bucket) {
+		mb.bucketsMu.Lock()
+		// Double-check：可能已被其他 goroutine 重建或刷新
+		if current, ok := mb.buckets[ip]; ok && current == bucket {
+			delete(mb.buckets, ip)
+			bucket = nil
+		}
+		mb.bucketsMu.Unlock()
+	}
+
+	// 未命中或刚被清理：创建新桶
+	if bucket == nil {
+		bucket = newTokenBucket(mb.rate, mb.capacity)
+		mb.bucketsMu.Lock()
+		if existing, ok := mb.buckets[ip]; ok {
+			bucket = existing
+		} else {
+			mb.buckets[ip] = bucket
+		}
+		mb.bucketsMu.Unlock()
+	}
+
+	return bucket
+}
+
+// isBucketExpired 检查桶是否已过期（距上次访问超过 ttl）。
+// 通过读取 bucket.lastTime 判断（take() 每次都会更新 lastTime）。
+// ttl <= 0 时永不过期。
+func (mb *MiddlewareBuilder) isBucketExpired(bucket *tokenBucket) bool {
+	if mb.ttl <= 0 {
+		return false
+	}
+	bucket.mu.Lock()
+	defer bucket.mu.Unlock()
+	return time.Since(bucket.lastTime) > mb.ttl
 }
 
 // clientIP 获取客户端 IP。
