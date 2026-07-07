@@ -48,7 +48,7 @@ func (b *Balancer) Pick(info balancer.PickInfo) (balancer.PickResult, error) {
 	return balancer.PickResult{
 		SubConn: res.conn,
 		Done: func(info balancer.DoneInfo) {
-			atomic.AddUint32(&res.cnt, -1)
+			atomic.AddUint32(&res.cnt, ^uint32(0))
 		},
 	}, nil
 }

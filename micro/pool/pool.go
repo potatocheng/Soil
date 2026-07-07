@@ -9,166 +9,265 @@ import (
 )
 
 type Pool struct {
-	// 最大空闲连接数
-	MaxIdleCnt int
-	// 最大连接容量
-	MaxConnCap int
-	// 当前连接数
-	ConnCnt int
-	// 最大空闲时间
-	maxIdleTime time.Duration
+	MaxIdleCnt      int
+	MaxConnCap      int
+	ConnCnt         int
+	maxIdleTime     time.Duration
+	maxConnLifetime time.Duration
 
-	// 空闲连接队列
-	idleConns chan *idleConn
-	// 请求连接阻塞队列
-	reqBlockQueue []connRequest
-
-	mutex sync.Mutex
-	// 生成连接的工厂函数
-	factory func() (net.Conn, error)
-	// 检查连接是否有效
-	ping func(conn net.Conn) error
+	idleConns   []*idleConn
+	activeConns map[net.Conn]struct{}
+	closed      bool
+	cond        *sync.Cond
+	mutex       sync.Mutex
+	factory     func() (net.Conn, error)
+	ping        func(net.Conn) error
+	closeCh     chan struct{}
+	wg          sync.WaitGroup
 }
 
 type idleConn struct {
 	conn           net.Conn
 	lastActiveTime time.Time
-}
-
-type connRequest struct {
-	connReqChan chan net.Conn
+	createTime     time.Time
 }
 
 func NewPool(initConnCnt int, maxIdleCnt int, maxConnCap int,
 	maxIdleTime time.Duration,
 	factory func() (net.Conn, error),
-	ping func(net.Conn) error) (*Pool, error) {
-	// 检查传入参数是否合法
+	ping func(net.Conn) error,
+	maxConnLifetime ...time.Duration) (*Pool, error) {
 	if initConnCnt > maxIdleCnt || maxConnCap < maxIdleCnt || initConnCnt < 0 {
 		return nil, errors.New("micro: 容量设置错误")
 	}
 	if factory == nil {
 		return nil, errors.New("micro: factory函数不能为nil")
 	}
-	//if ping == nil {
-	//	return nil, errors.New("micro: ping函数不能为nil")
-	//}
 
-	idleConns := make(chan *idleConn, initConnCnt)
+	mcl := time.Duration(0)
+	if len(maxConnLifetime) > 0 {
+		mcl = maxConnLifetime[0]
+	}
+
+	idleConns := make([]*idleConn, 0, maxIdleCnt)
 	for i := 0; i < initConnCnt; i++ {
 		conn, err := factory()
 		if err != nil {
+			for _, c := range idleConns {
+				_ = c.conn.Close()
+			}
 			return nil, err
 		}
-		idleConns <- &idleConn{
+		now := time.Now()
+		idleConns = append(idleConns, &idleConn{
 			conn:           conn,
-			lastActiveTime: time.Now(),
-		}
+			lastActiveTime: now,
+			createTime:     now,
+		})
 	}
 
 	res := &Pool{
-		MaxIdleCnt:  maxIdleCnt,
-		MaxConnCap:  maxConnCap,
-		ConnCnt:     0,
-		maxIdleTime: maxIdleTime,
-		idleConns:   idleConns,
-		factory:     factory,
-		ping:        ping,
+		MaxIdleCnt:      maxIdleCnt,
+		MaxConnCap:      maxConnCap,
+		ConnCnt:         initConnCnt,
+		maxIdleTime:     maxIdleTime,
+		maxConnLifetime: mcl,
+		idleConns:       idleConns,
+		activeConns:     make(map[net.Conn]struct{}),
+		factory:         factory,
+		ping:            ping,
+		closeCh:         make(chan struct{}),
 	}
+	res.cond = sync.NewCond(&res.mutex)
+
+	res.wg.Add(1)
+	go res.backgroundCleanup()
 
 	return res, nil
 }
 
-func (p *Pool) Get(ctx context.Context) (net.Conn, error) {
+func (p *Pool) backgroundCleanup() {
+	defer p.wg.Done()
+
+	interval := p.maxIdleTime / 2
+	if interval < 100*time.Millisecond {
+		interval = 100 * time.Millisecond
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
 	for {
-		// 尝试从空闲队列中拿连接
 		select {
-		case idleC := <-p.idleConns:
-			// 空闲队列中有连接
+		case <-ticker.C:
+			p.mutex.Lock()
+			if p.closed {
+				p.mutex.Unlock()
+				return
+			}
+
+			now := time.Now()
+			newIdleConns := make([]*idleConn, 0, len(p.idleConns))
+			for _, c := range p.idleConns {
+				if c.lastActiveTime.Add(p.maxIdleTime).Before(now) {
+					_ = c.conn.Close()
+					p.ConnCnt--
+					continue
+				}
+				if p.maxConnLifetime > 0 && c.createTime.Add(p.maxConnLifetime).Before(now) {
+					_ = c.conn.Close()
+					p.ConnCnt--
+					continue
+				}
+				newIdleConns = append(newIdleConns, c)
+			}
+			p.idleConns = newIdleConns
+
+			p.mutex.Unlock()
+			p.cond.Signal()
+		case <-p.closeCh:
+			return
+		}
+	}
+}
+
+func (p *Pool) Get(ctx context.Context) (net.Conn, error) {
+	p.mutex.Lock()
+
+	if p.closed {
+		p.mutex.Unlock()
+		return nil, errors.New("micro: 连接池已关闭")
+	}
+
+	for {
+		for len(p.idleConns) > 0 {
+			idleC := p.idleConns[len(p.idleConns)-1]
+			p.idleConns = p.idleConns[:len(p.idleConns)-1]
+
 			if idleC.lastActiveTime.Add(p.maxIdleTime).Before(time.Now()) {
-				// 连接过期, 关闭连接, 尝试拿下一个连接
 				_ = idleC.conn.Close()
+				p.ConnCnt--
 				continue
 			}
-			// 判断连接是否失效， 失效则丢弃
+
+			if p.maxConnLifetime > 0 && idleC.createTime.Add(p.maxConnLifetime).Before(time.Now()) {
+				_ = idleC.conn.Close()
+				p.ConnCnt--
+				continue
+			}
+
 			if p.ping != nil {
-				err := p.ping(idleC.conn)
-				if err != nil {
+				if err := p.ping(idleC.conn); err != nil {
 					_ = idleC.conn.Close()
+					p.ConnCnt--
 					continue
 				}
 			}
-			// 没有过期, 连接也没有失效，就返回连接
+
+			p.activeConns[idleC.conn] = struct{}{}
+			p.mutex.Unlock()
 			return idleC.conn, nil
-		default:
-			p.mutex.Lock()
-			// 空闲队列里没有连接
-			if p.ConnCnt >= p.MaxConnCap {
-				// 当前连接数超过最大连接容量
-				// 阻塞请求
-				connReq := connRequest{connReqChan: make(chan net.Conn, 1)}
-				p.reqBlockQueue = append(p.reqBlockQueue, connReq)
-				p.mutex.Unlock()
-				select {
-				case <-ctx.Done():
-					// 转发请求
-					go func() {
-						c := <-connReq.connReqChan
-						_ = p.Put(c)
-					}()
-					return nil, ctx.Err()
-				case c := <-connReq.connReqChan:
-					// 等待归还连接
-					return c, nil
-				}
-			}
+		}
+
+		if p.ConnCnt < p.MaxConnCap {
+			p.ConnCnt++
+			p.mutex.Unlock()
 
 			conn, err := p.factory()
 			if err != nil {
+				p.mutex.Lock()
+				p.ConnCnt--
+				p.mutex.Unlock()
 				return nil, err
 			}
-			p.ConnCnt++
+
+			p.mutex.Lock()
+			p.activeConns[conn] = struct{}{}
 			p.mutex.Unlock()
 			return conn, nil
+		}
+
+		if deadline, ok := ctx.Deadline(); ok {
+			timeout := time.Until(deadline)
+			if timeout <= 0 {
+				p.mutex.Unlock()
+				return nil, ctx.Err()
+			}
+			p.mutex.Unlock()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(timeout):
+				p.mutex.Lock()
+				if p.closed {
+					p.mutex.Unlock()
+					return nil, errors.New("micro: 连接池已关闭")
+				}
+				p.mutex.Unlock()
+				return nil, errors.New("micro: 获取连接超时")
+			}
+		}
+
+		p.cond.Wait()
+
+		if p.closed {
+			p.mutex.Unlock()
+			return nil, errors.New("micro: 连接池已关闭")
 		}
 	}
 }
 
 func (p *Pool) Put(conn net.Conn) error {
 	p.mutex.Lock()
-	if len(p.reqBlockQueue) > 0 {
-		// 有阻塞的请求，将连接分配给请求，唤醒请求
-		blockReq := p.reqBlockQueue[0]
-		p.reqBlockQueue = p.reqBlockQueue[1:]
-		p.mutex.Unlock()
-		blockReq.connReqChan <- conn
-		return nil
-	}
 	defer p.mutex.Unlock()
-	// 没有阻塞请求
-	select {
-	case p.idleConns <- &idleConn{conn: conn, lastActiveTime: time.Now()}:
-		// 空闲连接队列未满
-	default:
+
+	if p.closed {
+		_ = conn.Close()
+		return errors.New("micro: 连接池已关闭")
+	}
+
+	delete(p.activeConns, conn)
+
+	if len(p.idleConns) < p.MaxIdleCnt {
+		p.idleConns = append(p.idleConns, &idleConn{
+			conn:           conn,
+			lastActiveTime: time.Now(),
+			createTime:     time.Now(),
+		})
+	} else {
 		_ = conn.Close()
 		p.ConnCnt--
 	}
 
+	p.cond.Signal()
 	return nil
 }
 
-// Release 释放连接池中所有连接
 func (p *Pool) Release() {
 	p.mutex.Lock()
-	conn := p.idleConns
-	p.idleConns = nil
-	p.mutex.Unlock()
-
-	if conn != nil {
+	if p.closed {
+		p.mutex.Unlock()
 		return
 	}
+	p.closed = true
+	p.mutex.Unlock()
 
-	for c := range conn {
+	close(p.closeCh)
+	p.wg.Wait()
+
+	p.mutex.Lock()
+	for _, c := range p.idleConns {
 		_ = c.conn.Close()
 	}
+	p.idleConns = nil
+
+	for conn := range p.activeConns {
+		_ = conn.Close()
+	}
+	p.activeConns = nil
+
+	p.ConnCnt = 0
+	p.mutex.Unlock()
+
+	p.cond.Broadcast()
 }
