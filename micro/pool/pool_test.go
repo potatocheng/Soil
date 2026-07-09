@@ -33,13 +33,13 @@ func TestNewPool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPool failed: %v", err)
 	}
-	if p.ConnCnt != 1 {
-		t.Errorf("expected ConnCnt=1, got %d", p.ConnCnt)
+	if int(p.connCnt.Load()) != 1 {
+		t.Errorf("expected ConnCnt=1, got %d", int(p.connCnt.Load()))
 	}
 	if len(p.idleConns) != 1 {
 		t.Errorf("expected idleConns length=1, got %d", len(p.idleConns))
 	}
-	if p.closed {
+	if p.closed.Load() {
 		t.Error("expected closed=false")
 	}
 }
@@ -109,7 +109,7 @@ func TestReleaseIdempotent(t *testing.T) {
 	p.Release()
 	p.Release()
 
-	if !p.closed {
+	if !p.closed.Load() {
 		t.Error("expected closed=true after Release")
 	}
 }
@@ -213,8 +213,8 @@ func TestConnCntDecrementOnExpire(t *testing.T) {
 		t.Fatalf("Get failed: %v", err)
 	}
 
-	if p.ConnCnt != 1 {
-		t.Errorf("expected ConnCnt=1 after creating new connection, got %d", p.ConnCnt)
+	if int(p.connCnt.Load()) != 1 {
+		t.Errorf("expected ConnCnt=1 after creating new connection, got %d", int(p.connCnt.Load()))
 	}
 }
 
@@ -233,8 +233,8 @@ func TestConnCntDecrementOnPingFail(t *testing.T) {
 		t.Fatalf("Get failed: %v", err)
 	}
 
-	if p.ConnCnt != 1 {
-		t.Errorf("expected ConnCnt=1 after creating new connection, got %d", p.ConnCnt)
+	if int(p.connCnt.Load()) != 1 {
+		t.Errorf("expected ConnCnt=1 after creating new connection, got %d", int(p.connCnt.Load()))
 	}
 }
 
@@ -297,8 +297,8 @@ func TestConcurrentGetPut(t *testing.T) {
 
 	wg.Wait()
 
-	if p.ConnCnt > 100 {
-		t.Errorf("expected ConnCnt <= 100, got %d", p.ConnCnt)
+	if int(p.connCnt.Load()) > 100 {
+		t.Errorf("expected ConnCnt <= 100, got %d", int(p.connCnt.Load()))
 	}
 }
 
@@ -319,8 +319,8 @@ func TestIdempotentPoolCapacity(t *testing.T) {
 		}
 	}
 
-	if p.ConnCnt != 5 {
-		t.Errorf("expected ConnCnt=5, got %d", p.ConnCnt)
+	if int(p.connCnt.Load()) != 5 {
+		t.Errorf("expected ConnCnt=5, got %d", int(p.connCnt.Load()))
 	}
 	if len(p.idleConns) != 5 {
 		t.Errorf("expected idleConns length=5, got %d", len(p.idleConns))
@@ -363,14 +363,14 @@ func TestMarkUnhealthy(t *testing.T) {
 		t.Fatalf("Get failed: %v", err)
 	}
 
-	if p.ConnCnt != 1 {
-		t.Errorf("expected ConnCnt=1 after Get, got %d", p.ConnCnt)
+	if int(p.connCnt.Load()) != 1 {
+		t.Errorf("expected ConnCnt=1 after Get, got %d", int(p.connCnt.Load()))
 	}
 
 	conn.MarkUnhealthy()
 
-	if p.ConnCnt != 0 {
-		t.Errorf("expected ConnCnt=0 after MarkUnhealthy, got %d", p.ConnCnt)
+	if int(p.connCnt.Load()) != 0 {
+		t.Errorf("expected ConnCnt=0 after MarkUnhealthy, got %d", int(p.connCnt.Load()))
 	}
 }
 
@@ -505,8 +505,8 @@ func TestDoubleCloseSafe(t *testing.T) {
 	if len(p.idleConns) != 1 {
 		t.Errorf("expected idleConns length=1 after double Close, got %d", len(p.idleConns))
 	}
-	if p.ConnCnt != 1 {
-		t.Errorf("expected ConnCnt=1 after double Close, got %d", p.ConnCnt)
+	if int(p.connCnt.Load()) != 1 {
+		t.Errorf("expected ConnCnt=1 after double Close, got %d", int(p.connCnt.Load()))
 	}
 }
 
@@ -534,8 +534,8 @@ func TestCloseAndPutSafe(t *testing.T) {
 	if len(p.idleConns) != 1 {
 		t.Errorf("expected idleConns length=1 after Close+Put, got %d", len(p.idleConns))
 	}
-	if p.ConnCnt != 1 {
-		t.Errorf("expected ConnCnt=1 after Close+Put, got %d", p.ConnCnt)
+	if int(p.connCnt.Load()) != 1 {
+		t.Errorf("expected ConnCnt=1 after Close+Put, got %d", int(p.connCnt.Load()))
 	}
 }
 
@@ -560,8 +560,84 @@ func TestMarkUnhealthyAfterCloseSafe(t *testing.T) {
 	if len(p.idleConns) != 1 {
 		t.Errorf("expected idleConns length=1 after Close+MarkUnhealthy, got %d", len(p.idleConns))
 	}
-	if p.ConnCnt != 1 {
-		t.Errorf("expected ConnCnt=1 after Close+MarkUnhealthy, got %d", p.ConnCnt)
+	if int(p.connCnt.Load()) != 1 {
+		t.Errorf("expected ConnCnt=1 after Close+MarkUnhealthy, got %d", int(p.connCnt.Load()))
+	}
+}
+
+func TestPutNonPoolConnCountsConnCnt(t *testing.T) {
+	p, err := newTestPool(0, 10, 20)
+	if err != nil {
+		t.Fatalf("NewPool failed: %v", err)
+	}
+	defer p.Release()
+
+	conn := &mockConn{}
+	err = p.Put(conn)
+	if err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+
+	if int(p.connCnt.Load()) != 1 {
+		t.Errorf("expected ConnCnt=1 after Put non-PoolConn, got %d", int(p.connCnt.Load()))
+	}
+	if len(p.idleConns) != 1 {
+		t.Errorf("expected idleConns length=1, got %d", len(p.idleConns))
+	}
+
+	pc, err := p.Get(context.Background())
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if int(p.connCnt.Load()) != 1 {
+		t.Errorf("expected ConnCnt=1 after Get, got %d", int(p.connCnt.Load()))
+	}
+
+	err = pc.Close()
+	if err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+	if int(p.connCnt.Load()) != 1 {
+		t.Errorf("expected ConnCnt=1 after Close, got %d", int(p.connCnt.Load()))
+	}
+	if len(p.idleConns) != 1 {
+		t.Errorf("expected idleConns length=1, got %d", len(p.idleConns))
+	}
+}
+
+func TestReleaseWakesBlockedRequestsWithDeadline(t *testing.T) {
+	p, err := newTestPool(1, 1, 1)
+	if err != nil {
+		t.Fatalf("NewPool failed: %v", err)
+	}
+
+	_, err = p.Get(context.Background())
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+		defer cancel()
+		_, err := p.Get(ctx)
+		if err == nil {
+			t.Error("expected error when Get from closed pool")
+		}
+		close(done)
+	}()
+
+	time.Sleep(time.Millisecond * 100)
+	start := time.Now()
+	p.Release()
+
+	select {
+	case <-done:
+		if time.Since(start) > time.Second {
+			t.Error("blocked deadline request not woken up promptly")
+		}
+	case <-time.After(time.Second):
+		t.Error("blocked deadline request not woken up")
 	}
 }
 

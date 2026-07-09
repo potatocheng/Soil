@@ -9,16 +9,20 @@ import (
 	"time"
 )
 
+var (
+	errPoolClosed = errors.New("micro: 连接池已关闭")
+)
+
 type Pool struct {
-	MaxIdleCnt      int
-	MaxConnCap      int
-	ConnCnt         int
+	maxIdleCnt      int
+	maxConnCap      int
 	maxIdleTime     time.Duration
 	maxConnLifetime time.Duration
 
+	connCnt     atomic.Int64
 	idleConns   []*PoolConn
 	activeConns map[*PoolConn]struct{}
-	closed      bool
+	closed      atomic.Bool
 	cond        *sync.Cond
 	mutex       sync.Mutex
 	factory     func() (net.Conn, error)
@@ -106,56 +110,46 @@ func NewPool(initConnCnt int, maxIdleCnt int, maxConnCap int,
 		mcl = maxConnLifetime[0]
 	}
 
-	res := &Pool{
-		MaxIdleCnt:      maxIdleCnt,
-		MaxConnCap:      maxConnCap,
+	p := &Pool{
+		maxIdleCnt:      maxIdleCnt,
+		maxConnCap:      maxConnCap,
 		maxIdleTime:     maxIdleTime,
 		maxConnLifetime: mcl,
 		factory:         factory,
 		ping:            ping,
 		closeCh:         make(chan struct{}),
 		idleConns:       make([]*PoolConn, 0, maxIdleCnt),
-		connPool: sync.Pool{
-			New: func() interface{} {
-				return &PoolConn{}
-			},
-		},
+		activeConns:     make(map[*PoolConn]struct{}),
 	}
-	res.cond = sync.NewCond(&res.mutex)
+	p.cond = sync.NewCond(&p.mutex)
+	p.connPool.New = func() any {
+		return &PoolConn{}
+	}
 
 	for i := 0; i < initConnCnt; i++ {
 		conn, err := factory()
 		if err != nil {
-			for _, pc := range res.idleConns {
+			for _, pc := range p.idleConns {
 				_ = pc.conn.Close()
 			}
 			return nil, err
 		}
-		now := time.Now()
-		pc := res.connPool.Get().(*PoolConn)
-		pc.conn = conn
-		pc.lastActiveTime = now
-		pc.createTime = now
-		pc.pool = res
-		pc.returned.Store(false)
-		res.idleConns = append(res.idleConns, pc)
+		p.idleConns = append(p.idleConns, p.wrapConn(conn))
 	}
+	p.connCnt.Store(int64(initConnCnt))
 
-	res.ConnCnt = initConnCnt
-	res.activeConns = make(map[*PoolConn]struct{})
+	p.wg.Add(1)
+	go p.backgroundCleanup()
 
-	res.wg.Add(1)
-	go res.backgroundCleanup()
-
-	return res, nil
+	return p, nil
 }
 
 func (p *Pool) Stats() Stats {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 	return Stats{
-		MaxOpenConnections: p.MaxConnCap,
-		OpenConnections:    p.ConnCnt,
+		MaxOpenConnections: p.maxConnCap,
+		OpenConnections:    int(p.connCnt.Load()),
 		InUse:              len(p.activeConns),
 		Idle:               len(p.idleConns),
 		WaitCount:          p.waitCount.Load(),
@@ -179,46 +173,43 @@ func (p *Pool) backgroundCleanup() {
 	for {
 		select {
 		case <-ticker.C:
-			p.mutex.Lock()
-			if p.closed {
-				p.mutex.Unlock()
-				return
-			}
-
 			now := time.Now()
 			var toClose []*PoolConn
 			var idleClosed, lifetimeClosed int64
 
-			idleLen := len(p.idleConns)
-			for i := idleLen - 1; i >= 0; i-- {
+			p.mutex.Lock()
+			if p.closed.Load() {
+				p.mutex.Unlock()
+				return
+			}
+			for i := len(p.idleConns) - 1; i >= 0; i-- {
 				pc := p.idleConns[i]
-
 				if pc.lastActiveTime.Add(p.maxIdleTime).Before(now) {
 					toClose = append(toClose, pc)
-					idleClosed++
 					p.idleConns = append(p.idleConns[:i], p.idleConns[i+1:]...)
+					idleClosed++
 					continue
 				}
 				if p.maxConnLifetime > 0 && pc.createTime.Add(p.maxConnLifetime).Before(now) {
 					toClose = append(toClose, pc)
-					lifetimeClosed++
 					p.idleConns = append(p.idleConns[:i], p.idleConns[i+1:]...)
-					continue
+					lifetimeClosed++
 				}
 			}
-
-			p.ConnCnt -= int(idleClosed + lifetimeClosed)
 			p.mutex.Unlock()
 
 			for _, pc := range toClose {
-				_ = pc.conn.Close()
-				pc.conn = nil
-				p.connPool.Put(pc)
+				p.closeConn(pc)
 			}
-			p.maxIdleClosed.Add(idleClosed)
-			p.maxLifetimeClosed.Add(lifetimeClosed)
-
-			p.cond.Signal()
+			if idleClosed > 0 {
+				p.maxIdleClosed.Add(idleClosed)
+			}
+			if lifetimeClosed > 0 {
+				p.maxLifetimeClosed.Add(lifetimeClosed)
+			}
+			if len(toClose) > 0 {
+				p.cond.Broadcast()
+			}
 		case <-p.closeCh:
 			return
 		}
@@ -228,115 +219,115 @@ func (p *Pool) backgroundCleanup() {
 func (p *Pool) Get(ctx context.Context) (*PoolConn, error) {
 	p.mutex.Lock()
 
-	if p.closed {
+	if p.closed.Load() {
 		p.mutex.Unlock()
-		return nil, errors.New("micro: 连接池已关闭")
+		return nil, errPoolClosed
 	}
 
 	for {
-		for len(p.idleConns) > 0 {
-			idleLen := len(p.idleConns)
-			pc := p.idleConns[idleLen-1]
-			p.idleConns = p.idleConns[:idleLen-1]
-
-			now := time.Now()
-			if pc.lastActiveTime.Add(p.maxIdleTime).Before(now) {
-				_ = pc.conn.Close()
-				pc.conn = nil
-				p.connPool.Put(pc)
-				p.ConnCnt--
-				p.maxIdleClosed.Add(1)
-				continue
-			}
-
-			if p.maxConnLifetime > 0 && pc.createTime.Add(p.maxConnLifetime).Before(now) {
-				_ = pc.conn.Close()
-				pc.conn = nil
-				p.connPool.Put(pc)
-				p.ConnCnt--
-				p.maxLifetimeClosed.Add(1)
-				continue
-			}
-
-			if p.ping != nil {
-				p.mutex.Unlock()
-				if err := p.ping(pc.conn); err != nil {
-					_ = pc.conn.Close()
-					pc.conn = nil
-					p.connPool.Put(pc)
-					p.mutex.Lock()
-					p.ConnCnt--
-					continue
-				}
-				p.mutex.Lock()
-			}
-
-			pc.returned.Store(false)
+		pc, err := p.getIdleConnLocked()
+		if err != nil {
+			p.mutex.Unlock()
+			return nil, err
+		}
+		if pc != nil {
 			p.activeConns[pc] = struct{}{}
 			p.mutex.Unlock()
 			return pc, nil
 		}
 
-		if p.ConnCnt < p.MaxConnCap {
-			p.ConnCnt++
+		if p.connCnt.Load() < int64(p.maxConnCap) {
+			p.connCnt.Add(1)
 			p.mutex.Unlock()
 
 			conn, err := p.factory()
 			if err != nil {
-				p.mutex.Lock()
-				p.ConnCnt--
-				p.mutex.Unlock()
+				p.connCnt.Add(-1)
+				p.cond.Broadcast()
 				return nil, err
 			}
 
-			now := time.Now()
-			pc := p.connPool.Get().(*PoolConn)
-			pc.conn = conn
-			pc.lastActiveTime = now
-			pc.createTime = now
-			pc.pool = p
-			pc.returned.Store(false)
-
+			pc := p.wrapConn(conn)
 			p.mutex.Lock()
+			if p.closed.Load() {
+				p.mutex.Unlock()
+				p.closeConn(pc)
+				return nil, errPoolClosed
+			}
 			p.activeConns[pc] = struct{}{}
 			p.mutex.Unlock()
 			return pc, nil
 		}
 
-		if deadline, ok := ctx.Deadline(); ok {
-			timeout := time.Until(deadline)
-			if timeout <= 0 {
-				p.mutex.Unlock()
-				return nil, ctx.Err()
-			}
-			p.waitCount.Add(1)
-			start := time.Now()
-			p.mutex.Unlock()
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(timeout):
-				p.mutex.Lock()
-				p.waitDurationNs.Add(time.Since(start).Nanoseconds())
-				if p.closed {
-					p.mutex.Unlock()
-					return nil, errors.New("micro: 连接池已关闭")
-				}
-				p.mutex.Unlock()
-				return nil, errors.New("micro: 获取连接超时")
-			}
-		}
-
 		p.waitCount.Add(1)
 		start := time.Now()
-		p.cond.Wait()
+		err = p.waitWithContext(ctx)
 		p.waitDurationNs.Add(time.Since(start).Nanoseconds())
-
-		if p.closed {
+		if err != nil {
 			p.mutex.Unlock()
-			return nil, errors.New("micro: 连接池已关闭")
+			return nil, err
 		}
 	}
+}
+
+func (p *Pool) waitWithContext(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	stop := context.AfterFunc(ctx, func() {
+		p.cond.Broadcast()
+	})
+	defer stop()
+
+	p.cond.Wait()
+
+	if p.closed.Load() {
+		return errPoolClosed
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p *Pool) getIdleConnLocked() (*PoolConn, error) {
+	now := time.Now()
+	for len(p.idleConns) > 0 {
+		idx := len(p.idleConns) - 1
+		pc := p.idleConns[idx]
+		p.idleConns = p.idleConns[:idx]
+
+		if pc.lastActiveTime.Add(p.maxIdleTime).Before(now) {
+			p.closeConnLocked(pc)
+			p.maxIdleClosed.Add(1)
+			continue
+		}
+
+		if p.maxConnLifetime > 0 && pc.createTime.Add(p.maxConnLifetime).Before(now) {
+			p.closeConnLocked(pc)
+			p.maxLifetimeClosed.Add(1)
+			continue
+		}
+
+		if p.ping != nil {
+			p.mutex.Unlock()
+			err := p.ping(pc.conn)
+			p.mutex.Lock()
+			if p.closed.Load() {
+				p.closeConnLocked(pc)
+				return nil, errPoolClosed
+			}
+			if err != nil {
+				p.closeConnLocked(pc)
+				continue
+			}
+		}
+
+		pc.returned.Store(false)
+		return pc, nil
+	}
+	return nil, nil
 }
 
 func (p *Pool) Put(conn net.Conn) error {
@@ -347,26 +338,21 @@ func (p *Pool) Put(conn net.Conn) error {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
-	if p.closed {
+	if p.closed.Load() {
 		_ = conn.Close()
-		return errors.New("micro: 连接池已关闭")
+		return errPoolClosed
 	}
 
-	now := time.Now()
-	if len(p.idleConns) < p.MaxIdleCnt {
-		pc := p.connPool.Get().(*PoolConn)
-		pc.conn = conn
-		pc.lastActiveTime = now
-		pc.createTime = now
-		pc.pool = p
-		pc.returned.Store(false)
+	p.connCnt.Add(1)
+	pc := p.wrapConn(conn)
+
+	if len(p.idleConns) < p.maxIdleCnt {
 		p.idleConns = append(p.idleConns, pc)
-	} else {
-		_ = conn.Close()
-		p.ConnCnt--
+		p.cond.Signal()
+		return nil
 	}
 
-	p.cond.Signal()
+	p.closeConnLocked(pc)
 	return nil
 }
 
@@ -376,70 +362,41 @@ func (p *Pool) putConn(pc *PoolConn) error {
 	}
 
 	p.mutex.Lock()
+	defer p.mutex.Unlock()
 
-	if p.closed {
-		p.mutex.Unlock()
-		if pc.conn != nil {
-			_ = pc.conn.Close()
-			pc.conn = nil
-		}
-		p.connPool.Put(pc)
-		return errors.New("micro: 连接池已关闭")
+	if p.closed.Load() {
+		p.closeConnLocked(pc)
+		return errPoolClosed
 	}
 
 	delete(p.activeConns, pc)
 
-	var toClose *PoolConn
-	var closeConn bool
-
-	if p.maxConnLifetime > 0 && time.Now().Sub(pc.createTime) > p.maxConnLifetime {
-		toClose = pc
-		closeConn = true
-		p.ConnCnt--
+	if p.maxConnLifetime > 0 && time.Since(pc.createTime) > p.maxConnLifetime {
+		p.closeConnLocked(pc)
 		p.maxLifetimeClosed.Add(1)
+		p.cond.Broadcast()
+		return nil
+	}
+
+	if p.ping != nil {
 		p.mutex.Unlock()
-		p.cond.Signal()
-	} else if p.ping != nil {
-		p.mutex.Unlock()
-		if err := p.ping(pc.conn); err != nil {
-			toClose = pc
-			closeConn = true
-			p.mutex.Lock()
-			p.ConnCnt--
-			p.mutex.Unlock()
-			p.cond.Signal()
-		} else {
-			pc.lastActiveTime = time.Now()
-			p.mutex.Lock()
-			if len(p.idleConns) < p.MaxIdleCnt {
-				p.idleConns = append(p.idleConns, pc)
-			} else {
-				toClose = pc
-				closeConn = true
-				p.ConnCnt--
-			}
-			p.mutex.Unlock()
-			p.cond.Signal()
+		err := p.ping(pc.conn)
+		p.mutex.Lock()
+		if err != nil {
+			p.closeConnLocked(pc)
+			p.cond.Broadcast()
+			return nil
 		}
+	}
+
+	pc.lastActiveTime = time.Now()
+	if len(p.idleConns) < p.maxIdleCnt {
+		p.idleConns = append(p.idleConns, pc)
+		p.cond.Signal()
 	} else {
-		pc.lastActiveTime = time.Now()
-		if len(p.idleConns) < p.MaxIdleCnt {
-			p.idleConns = append(p.idleConns, pc)
-		} else {
-			toClose = pc
-			closeConn = true
-			p.ConnCnt--
-		}
-		p.mutex.Unlock()
-		p.cond.Signal()
+		p.closeConnLocked(pc)
+		p.cond.Broadcast()
 	}
-
-	if closeConn && toClose != nil {
-		_ = toClose.conn.Close()
-		toClose.conn = nil
-		p.connPool.Put(toClose)
-	}
-
 	return nil
 }
 
@@ -452,42 +409,60 @@ func (p *Pool) markUnhealthy(pc *PoolConn) {
 	defer p.mutex.Unlock()
 
 	delete(p.activeConns, pc)
-	_ = pc.conn.Close()
-	pc.conn = nil
-	p.connPool.Put(pc)
-	p.ConnCnt--
-	p.cond.Signal()
+	p.closeConnLocked(pc)
+	p.cond.Broadcast()
 }
 
 func (p *Pool) Release() {
 	p.mutex.Lock()
-	if p.closed {
+	if p.closed.Load() {
 		p.mutex.Unlock()
 		return
 	}
-	p.closed = true
+	p.closed.Store(true)
 	p.mutex.Unlock()
 
 	close(p.closeCh)
+	p.cond.Broadcast()
 	p.wg.Wait()
 
 	p.mutex.Lock()
 	for _, pc := range p.idleConns {
-		_ = pc.conn.Close()
-		pc.conn = nil
-		p.connPool.Put(pc)
+		p.closeConnLocked(pc)
 	}
 	p.idleConns = nil
 
 	for pc := range p.activeConns {
-		_ = pc.conn.Close()
-		pc.conn = nil
-		p.connPool.Put(pc)
+		p.closeConnLocked(pc)
 	}
 	p.activeConns = nil
 
-	p.ConnCnt = 0
+	p.connCnt.Store(0)
 	p.mutex.Unlock()
+}
 
-	p.cond.Broadcast()
+func (p *Pool) wrapConn(conn net.Conn) *PoolConn {
+	pc := p.connPool.Get().(*PoolConn)
+	now := time.Now()
+	pc.conn = conn
+	pc.createTime = now
+	pc.lastActiveTime = now
+	pc.pool = p
+	pc.returned.Store(false)
+	return pc
+}
+
+func (p *Pool) closeConnLocked(pc *PoolConn) {
+	if pc.conn != nil {
+		_ = pc.conn.Close()
+		pc.conn = nil
+	}
+	p.connPool.Put(pc)
+	p.connCnt.Add(-1)
+}
+
+func (p *Pool) closeConn(pc *PoolConn) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	p.closeConnLocked(pc)
 }

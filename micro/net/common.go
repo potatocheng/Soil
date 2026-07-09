@@ -1,36 +1,49 @@
 package net
 
 import (
-	"encoding/binary"
+	"errors"
+	"io"
 	"net"
 )
 
-const numOfLengthBytes = 8
+var (
+	errPoolClosed   = errors.New("client: connection pool closed")
+	errConnClosed   = errors.New("client: connection closed")
+	errNoConnection = errors.New("client: no available connection")
+	// ErrNoEndpoint 表示没有可用的后端地址
+	ErrNoEndpoint = errors.New("client: no available endpoint")
+)
 
-func Recv(conn net.Conn) ([]byte, error) {
-	// 解析传输数据的长度
-	lenBs := make([]byte, numOfLengthBytes)
-	_, err := conn.Read(lenBs)
-	if err != nil {
-		return nil, err
+// writeFull 向 w 中完整写入 data
+func writeFull(w io.Writer, data []byte) error {
+	for len(data) > 0 {
+		n, err := w.Write(data)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		data = data[n:]
 	}
-	length := binary.BigEndian.Uint64(lenBs)
-	// 读取传输数据
-	data := make([]byte, length)
-	_, err = conn.Read(data)
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
+	return nil
 }
 
-func EncapsulatedData(data []byte) []byte {
-	dataLength := len(data)
-	res := make([]byte, numOfLengthBytes+dataLength)
-	// 将数据长度放在返回结果前面
-	binary.BigEndian.PutUint64(res[:numOfLengthBytes], uint64(dataLength))
-	// 将数据放到返回结果中
-	copy(res[numOfLengthBytes:], data)
+// readFrame 从 r 中读取一个 Frame
+func readFrame(r io.Reader, lim frameLimits) (*Frame, error) {
+	return DecodeFrameWithLimits(func(buf []byte) error {
+		_, err := io.ReadFull(r, buf)
+		return err
+	}, lim)
+}
 
-	return res
+// isClosedConnErr 判断是否为连接已关闭类错误
+func isClosedConnErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) {
+		return true
+	}
+	return false
 }
