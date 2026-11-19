@@ -33,7 +33,7 @@ services:
       - 2380:2380
 
   prometheus:
-    image: bitnami/prometheus:latest
+    image: soldevelo/prometheus:latest
     container_name: prometheus
     volumes:
       - ./prometheus.yaml:/opt/bitnami/prometheus/conf/prometheus.yml
